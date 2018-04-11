@@ -33,8 +33,8 @@ use Carp;
 # The objective of this code is to build a matcher for these sets, using C code
 # which is both efficient, and has a small footprint. We do this with a combination
 # of memcmp() and switch()/if() comparisons on the characters in the strings, and
-# the the length of the strings. We process prefix and suffix indepenently so we can
-# reuse the suffix code for the multiple prefixes.
+# on the length of the strings. We process prefix and suffix indepenently so we can
+# reuse the suffix code for multiple prefixes.
 #
 # Our general strategy is:
 #
@@ -57,20 +57,25 @@ use Carp;
 # prefixes.
 
 
-my $DEBUG=0;
-my %EXTRACT;
-my %ENUM_SEEN;
-my %SECOND_LEVEL;
-my $BLOB="";
+my $DEBUG=0;        # if enables adds a bit of debug output to the code in comments.
+my %LABEL;          # suffixes which need labels, keyed by the address of the suffix subhashes
+my %SECOND_LEVEL;   # suffixes which have been generated already, keyed by the address of the suffix subhashes
+my %ENUM_SEEN;      # map of full key name to value (only canonical keys)
+my $BLOB="";        # a blob of text we use for memcmp comparisons.
+
+# maximum number of memcmp() operations per case statement.
 my $MAX_MEMCMP_PER_CASE= shift(@ARGV) || 3; # increase me to reduce code footprint at the modest cost of some size.
 
 $Data::Dumper::Sortkeys=1;
 
+# _ind($string,$depth) - indent a string a certain amount
 sub _ind {
     Carp::confess("no repeat") unless defined $_[1];
     Carp::confess("arg 1 is not a number!") if $_[1]=~/\D/;
     return +("    " x $_[1]) . $_[0];
 }
+
+# _indf($fmt,@args,$depth) - indent a sprintf a certain amount
 sub _indf {
     my $fmt= shift @_;
     my $depth = pop @_;
@@ -78,11 +83,13 @@ sub _indf {
     return _ind(sprintf($fmt,@_),$depth);
 }
 
+# _case($char,$depth) - produce an indented case statement for a single char
 sub _case {
     my ($char,$depth)= @_;
     return _indf("case %s:", $char=~/\w/ ? "'$char'" : ord($char), $depth);
 }
 
+# _enum_for_value($value) - map a canonical property name to an integer.
 sub _enum_for_value {
     my ($value)= @_;
     confess "got a ref" if ref $value;
@@ -90,6 +97,7 @@ sub _enum_for_value {
     return sprintf "return %d; /* $value */",$ENUM_SEEN{$value} //= $nkeys;
 }
 
+# handle the suffix. "second_level" refers to the base hash of data which is an HoH.
 sub _handle_second_level {
     my ($hash,$key_name,$len_name,$depth)= @_;
     confess "not a hash" unless ref $hash;
@@ -108,7 +116,7 @@ sub _handle_second_level {
                 $key_name, _index_in_blob($key), length($key), _enum_for_value($hash->{$key}), $key, $depth
             );
         }
-    } elsif (my $name= $EXTRACT{0+$hash}) {
+    } elsif (my $name= $LABEL{0+$hash}) {
         $ret= join "\n", _indf("%s: {",$name,$depth),
                     _handle_tail($hash,"","suffix","suffix_len",$depth+1),
                     #_ind("return 0; /* No match! */",$depth+1),
@@ -120,6 +128,8 @@ sub _handle_second_level {
     return $ret;
 }
 
+# add one or more hashes of strings to the blob, skipping overlapping
+# strings.
 sub _add_to_blob {
     my %merged;
     foreach my $hash (@_) {
@@ -134,6 +144,7 @@ sub _add_to_blob {
     }
 }
 
+# find the index of a key in the blob, will die if it cannot find it.
 sub _index_in_blob {
     my ($key)= @_;
     my $index= index $BLOB, $key;
@@ -141,6 +152,7 @@ sub _index_in_blob {
     return $index;
 }
 
+# handles the first two level switch for the strings length 2 and up.
 sub _switch_two_chars {
     my ($hash,$rhs,$key_name,$len_name,$depth)=@_;
 
@@ -177,7 +189,8 @@ sub _switch_two_chars {
 
 }
 
-
+# handles the "tail" of the prefix, which will already have had its first
+# two character removed.
 sub _handle_tail {
     my ($hash, $pfx, $key_name, $len_name, $depth)= @_;
     my $ofs= length $pfx;
@@ -230,6 +243,8 @@ sub _handle_tail {
     return join "\n", @code;
 }
 
+# generic sub to handle a hash of keys of the same length,
+# the actual switching on length is handled elsewhere.
 sub _handle_keys_same_length {
     my ($hash,$pfx,$key_name,$len_name,$depth,$covered)= @_;
     $covered||=[];
@@ -306,6 +321,7 @@ sub _handle_keys_same_length {
 }
 
 
+# main routine - processes return from build_two_level_hash().
 sub process_two_level_hash {
     my ($hash, $rhs)= @_;
 
@@ -342,7 +358,7 @@ sub process_two_level_hash {
     return join "\n",@code,"";
 }
 
-my $ALL_KEYS;
+# read our input data and build the basic data structures
 sub build_two_level_hash {
     do "../perl/lib/unicore/Heavy.pl";
     my @k;
@@ -366,7 +382,7 @@ sub build_two_level_hash {
             $two_level{$lhs}{$rhs//""}= $key;
         }
         foreach my $key (sort keys %two_level) {
-            $EXTRACT{0+$two_level{$key}}= $key."_suffix";
+            $LABEL{0+$two_level{$key}}= $key."_suffix";
             foreach my $rkey (@{$rev{$key}}) {
                 my $suffixes= $two_level{$rkey}= $two_level{$key};
                 foreach my $suffix (sort keys %$suffixes) {
@@ -375,22 +391,13 @@ sub build_two_level_hash {
             }
         }
     }
-    if (1) {
-        my $buf;
-        foreach my $prefix (sort keys %two_level) {
-            foreach my $suffix (sort keys %{$two_level{$prefix}}) {
-                my $full= length $suffix ? "$prefix=$suffix" : $prefix;
-                $buf .= $full . "\0\0\0";
-            }
-        }
-        $ALL_KEYS = $buf;
-    }
     return (\%two_level, \%rhs_keys, \%tests);
 }
 
 my ($two_level, $rhs, $tests)= build_two_level_hash();
 my $main= process_two_level_hash($two_level, $rhs);
 
+# output the blob as C code.
 my @code;
 push @code, "const unsigned char * const BLOB =\n";
 my $blob_len= length $BLOB;
@@ -403,6 +410,7 @@ push @code, "/* BLOB length: $blob_len */\n";
 push @code, $main,"\n";
 $DEBUG or s/ \(\w\)/ /g for @code;
 
+# output the test C code
 {
     open my $ofh,">","uni_prop_parser.c"
         or die "Failed to open 'uni_prop_parser.c': $!";
@@ -438,6 +446,7 @@ ENDMAIN
     close $ofh;
 }
 
+# output the test Perl code.
 {
     open my $ofh, ">", "uni_prop_parser_test.pl";
     my $num_tests= 0+keys %$tests;
