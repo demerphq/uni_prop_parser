@@ -59,20 +59,20 @@ sub build_perfect_hash {
     my @second_level;
     foreach my $first_idx (sort { @{$key_buckets->{$b}} <=> @{$key_buckets->{$a}} || $a <=> $b } keys %$key_buckets) {
         my $keys= $key_buckets->{$first_idx};
+        #printf "got %d keys in bucket %d\n", 0+@$keys, $first_idx;
         my $seed2;
         SEED2:
         for ($seed2=1;1;$seed2++) {
             goto FIND_SEED if $seed2 > 0xFFFF;
             my @idx= map {
-                ( ( ( ( ( $key_to_hash->{$_} >> $RSHIFT ) ^ $seed2 ) & 0xFFFFFFFF ) ) ) % $n
+                ( ( ( $key_to_hash->{$_} >> $RSHIFT ) ^ $seed2 ) & 0xFFFFFFFF ) % $n 
             } @$keys;
             my %seen;
             next SEED2 if grep { $second_level[$_] || $seen{$_}++ } @idx;
             $first_level[$first_idx]= $seed2;
             @second_level[@idx]= map {
-                my ($prefix,$suffix)= unpack "A$split_pos->{$_}A*", $_;
-                $token{$prefix}++;
-                $token{$suffix}++ if defined $suffix;
+                my $sp= $split_pos->{$_} // die "no split pos for '$_':$!";
+                my ($prefix,$suffix)= unpack "A${sp}A*", $_;
 
                 +{
                     key     => $_,
@@ -88,18 +88,62 @@ sub build_perfect_hash {
 
     }
     $second_level[$_]{seed2}= $first_level[$_]||0, $second_level[$_]{idx}= $_ for 0 .. $#second_level;
+
     return $seed1, \@second_level, $length_all_keys;
 }
 
 sub build_split_words {
-    my ($hash, $blob, $old_res)= @_;
+    my ($hash, $preprocess, $blob, $old_res)= @_;
+    my %appended;
     $blob //= "";
+    if ($preprocess) {
+        my %parts;
+        foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %$hash) {
+            my ($prefix,$suffix);
+            if ($key=~/^([^=]+=)([^=]+)\z/) {
+                ($prefix,$suffix)= ($1, $2);
+                $parts{$suffix}++;
+                #$parts{$prefix}++;
+            } else {
+                $prefix= $key;
+                $parts{$prefix}++;
+            }
+
+        }
+        foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %parts) {
+            $blob .= $key . "\0";
+        }
+        printf "Using preprocessing, initial blob size %d\n", length($blob);
+    } else {
+        printf "No preprocessing, initial blob size %d\n", length($blob);
+    }
     my %res;
+
+    REDO:
+    %res= ();
     KEY:
-    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %$hash) {
-        my $best= 0;
+    foreach my $key (
+        sort {
+            (length($b) <=> length($a)) ||
+            ($a cmp $b)
+        }
+        keys %$hash
+    ) {
+        next if exists $res{$key};
+        if (index($blob,$key) >= 0 ) {
+            my $idx= length($key);
+            if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
+                print "changing: $key => $old_res->{$key} : $idx\n";
+            }
+            $res{$key}= $idx;
+            next KEY;
+        }
+        my $best= length($key);
         my $append= $key;
-        foreach my $idx (reverse 0 .. length($key)) {
+        my $min= 0; #length $key >= 4 ? 4 : 0;
+        my $best_prefix;
+        my $best_suffix;
+        foreach my $idx (reverse $min .. length($key)) {
             my $prefix= substr($key,0,$idx);
             my $suffix= substr($key,$idx);
             my $i1= index($blob,$prefix)>=0;
@@ -109,26 +153,47 @@ sub build_split_words {
                     print "changing: $key => $old_res->{$key} : $idx\n";
                 }
                 $res{$key}= $idx;
+                $appended{$prefix}++;
+                $appended{$suffix}++;
                 next KEY;
             } elsif ($i1) {
                 if (length $suffix <= length $append) {
                     $best= $idx;
                     $append= $suffix;
+                    $best_prefix= $prefix;
+                    $best_suffix= $suffix;
                 }
             } elsif ($i2) {
                 if (length $prefix <= length $append) {
                     $best= $idx;
                     $append= $prefix;
+                    $best_prefix= $prefix;
+                    $best_suffix= $suffix;
                 }
             }
         }
-        #print "$key => $best : $append\n";
         if ($DEBUG and $old_res and $old_res->{$key} != $best) {
             print "changing: $key => $old_res->{$key} : $best\n";
         }
+        #print "$best_prefix|$best_suffix => $best => $append\n";
         $res{$key}= $best;
         $blob .= $append;
+        $appended{$best_prefix}++;
+        $appended{$best_suffix}++;
     }
+    my $b2 = "";
+    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %appended) {
+        $b2 .= $key unless index($b2,$key)>=0;
+    }
+    if (length($b2)<length($blob)) {
+        printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2);
+        $blob= $b2;
+        %appended=();
+        goto REDO;
+    } else {
+        printf "Length old blob: %d length new blob: %d, keeping old blob\n", length($blob),length($b2);
+    }
+    die sprintf "not same size? %d != %d", 0+keys %res, 0+keys %$hash unless keys %res == keys %$hash;
     return ($blob,\%res);
 }
 
@@ -337,8 +402,19 @@ sub make_mph_from_hash {
     my $hash= shift;
 
     # we do this twice because often we can find longer prefixes on the second pass.
-    my ($orig_smart_blob, $old_res)= build_split_words($hash);
-    my ($smart_blob, $res_to_split)= build_split_words($hash, $orig_smart_blob, $old_res);
+    my @keys= sort {length($b) <=> length($a) || $a cmp $b } keys %$hash;
+
+    my ($smart_blob, $res_to_split)= build_split_words($hash,0);
+    {
+        my ($smart_blob2, $res_to_split2)= build_split_words($hash,1);
+        if (length($smart_blob) > length($smart_blob2)) {
+            printf "Using preprocess-smart blob, length: %d (vs %d)\n", length $smart_blob2, length $smart_blob;
+            $smart_blob= $smart_blob2;
+            $res_to_split= $res_to_split2;
+        } else {
+            printf "Using greedy-smart blob, length: %d (vs %d)\n", length $smart_blob, length $smart_blob2;
+        }
+    }
     my ($seed1, $second_level, $length_all_keys)= build_perfect_hash($hash, $res_to_split);
     my ($rows, $defines, $tests)= build_array_of_struct($second_level, $smart_blob);
     return ($second_level, $seed1, $length_all_keys, $smart_blob, $rows, $defines, $tests);
@@ -368,20 +444,35 @@ sub make_files {
 }
 
 unless (caller) {
-    my $hash= do {
+    my %hash;
+    {
         no warnings;
         do "../perl/lib/unicore/Heavy.pl";
-        my %hash= map {
-            my $munged= uc($_);
-            $munged=~s/\W/__/g;
-            $_ => $munged
-        } keys %utf8::loose_to_file_of;
-        \%hash
-    };
+        %hash= %utf8::loose_to_file_of;
+    }
+    if ($ENV{MERGE_KEYS}) {
+        my @keys= keys %hash;
+        foreach my $loose (keys %utf8::loose_property_name_of) {
+            my $to= $utf8::loose_property_name_of{$loose};
+            next if $to eq $loose;
+            foreach my $key (@keys) {
+                my $copy= $key;
+                if ($copy=~s/^\Q$to\E(=|\z)/$loose$1/) {
+                    #print "$key => $copy\n";
+                    $hash{$copy}= $key;
+                }
+            }
+        }
+    }
+    foreach my $key (keys %hash) {
+        my $munged= uc($key);
+        $munged=~s/\W/__/g;
+        $hash{$key} = $munged;
+    }
 
     my $name= shift @ARGV;
     $name ||= "mph";
-    make_files($hash,$name);
+    make_files(\%hash,$name);
 }
 
 1;
