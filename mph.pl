@@ -341,20 +341,31 @@ sub make_files {
 }
 
 unless (caller) {
-    my $hash= do {
+    my %hash;
+    {
         no warnings;
         do "../perl/lib/unicore/Heavy.pl";
-        my %hash= map {
-            my $munged= uc($_);
-            $munged=~s/\W/__/g;
-            $_ => $munged
-        } keys %utf8::loose_to_file_of;
-        \%hash
-    };
+        %hash= %utf8::loose_to_file_of;
+    }
+    my @keys= keys %hash;
+    foreach my $loose (keys %utf8::loose_property_name_of) {
+        my $to= $utf8::loose_property_name_of{$loose};
+        foreach my $key (@keys) {
+            my $copy= $key;
+            if ($copy=~s/^\Q$to\E/$loose/) {
+                $hash{$copy}= $key;
+            }
+        }
+    }
+    foreach my $key (keys %hash) {
+        my $munged= uc($key);
+        $munged=~s/\W/__/g;
+        $hash{$key} = $munged;
+    }
 
     my $name= shift @ARGV;
     $name ||= "mph";
-    make_files($hash,$name);
+    make_files(\%hash,$name);
 }
 
 1;
