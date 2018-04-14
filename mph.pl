@@ -263,16 +263,17 @@ EOF_CODE
 }
 
 sub print_main {
-    my ($ofh)=@_;
-    print $ofh <<'EOF_CODE';
-#include "mph_algo.h"
+    my ($ofh,$h_file)=@_;
+    print $ofh <<"EOF_CODE";
+#include "$h_file"
+
 int main(int argc, unsigned char *argv[]){
     int i;
     for (i=1; i<argc; i++) {
         unsigned char *key = argv[i];
         int key_len = strlen(key);
         printf("key: %s ", key);
-        printf("got: %d\n", mph_match(key,key_len));
+        printf("got: %d\\n", mph_match(key,key_len));
     }
 }
 EOF_CODE
@@ -301,13 +302,13 @@ sub print_tests {
 }
 
 sub print_test_binary {
-    my ($file,$second_level, $seed1, $long_blob, $smart_blob, $rows, $defines)= @_;
+    my ($file,$h_file, $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file': $!";
     print_includes($ofh);
     print_defines($ofh, $defines);
     #print_algo($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows);
-    print_main($ofh);
+    print_main($ofh,$h_file);
     close $ofh;
 }
 
@@ -322,6 +323,22 @@ sub make_mph_from_hash {
     return ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests);
 }
 
+sub make_files {
+    my ($hash,$base_name)= @_;
+
+    my $h_name= $base_name . "_algo.h";
+    my $c_name= $base_name . "_test.c";
+    my $p_name= $base_name . "_test.pl";
+
+    my ($second_level, $seed1, $long_blob,
+        $smart_blob, $rows, $defines, $tests)= make_mph_from_hash( $hash );
+    print_algo( $h_name,
+        $second_level, $seed1, $long_blob, $smart_blob, $rows );
+    print_test_binary( $c_name, $h_name,
+        $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines );
+    print_tests( $p_name, $tests );
+}
+
 my $hash= do {
     no warnings;
     do "../perl/lib/unicore/Heavy.pl";
@@ -333,10 +350,9 @@ my $hash= do {
     \%hash
 };
 
-my ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests)= make_mph_from_hash($hash);
-print_algo("mph_algo.h", $second_level, $seed1, $long_blob, $smart_blob, $rows);
-print_test_binary("mph_test.c", $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines);
-print_tests("mph_test.pl", $tests);
+my $name= shift @ARGV;
+$name ||= "mph";
+make_files($hash,$name);
 
 __END__
 
