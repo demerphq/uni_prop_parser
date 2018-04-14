@@ -1,3 +1,4 @@
+package MinimalPerfectHash;
 use strict;
 use warnings;
 use Data::Dumper;
@@ -339,65 +340,23 @@ sub make_files {
     print_tests( $p_name, $tests );
 }
 
-my $hash= do {
-    no warnings;
-    do "../perl/lib/unicore/Heavy.pl";
-    my %hash= map {
-        my $munged= uc($_);
-        $munged=~s/\W/__/g;
-        $_ => $munged
-    } keys %utf8::loose_to_file_of;
-    \%hash
-};
+unless (caller) {
+    my $hash= do {
+        no warnings;
+        do "../perl/lib/unicore/Heavy.pl";
+        my %hash= map {
+            my $munged= uc($_);
+            $munged=~s/\W/__/g;
+            $_ => $munged
+        } keys %utf8::loose_to_file_of;
+        \%hash
+    };
 
-my $name= shift @ARGV;
-$name ||= "mph";
-make_files($hash,$name);
+    my $name= shift @ARGV;
+    $name ||= "mph";
+    make_files($hash,$name);
+}
 
+1;
 __END__
 
-sub build_split_words3 {
-    my ($hash,$blob)= @_;
-    my $had_blob= $blob;
-    $blob //= "";
-    my %res;
-    my %token;
-    KEY:
-    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %$hash) {
-        my @best;
-        my @best_parts;
-        my @append;
-        my $best_length;
-        my $best_nonzero;
-        my $best_wordlen;
-        foreach my $l1 (0 .. length($key)) {
-            foreach my $l2 (0..(length($key)-$l1)) {
-                my @parts= unpack "A${l1}A${l2}A*", $key;
-                #$token{$_}+=length($_) for @parts;
-                my $nonzero= 0+ grep length $_, @parts;
-                my $wordlen= 0+ grep { length($_)==0 or length($_) >= 4 } @parts;
-                my @index= map { index($blob,$_) } @parts;
-                my @missing= map { $index[$_]<0 ? $parts[$_] : () } 0..$#index;
-                my $length=0;
-                $length+=length $_ for @missing;
-                my @this= ($index[0], $l1, $index[1],$l2, $index[2],length($key)-($l1+$l2));
-                if (!$had_blob and !$length) {
-                    #print "$key => @parts\n";
-                    $res{$key}=\@this;
-                    next KEY;
-                } elsif (!@best or $length < $best_length or ($length == $best_length && $nonzero < $best_nonzero ) ) {
-                    @best= @this;
-                    @append= @missing;
-                    $best_length= $length;
-                    @best_parts= @parts;
-                    $best_nonzero= $nonzero;
-                    $best_wordlen= $wordlen;
-                }
-            }
-        }
-        $res{$key}=\@best;
-        $blob.=join "", @append;
-        print "$key => [@best] : @append\n";
-    }
-    return ($blob,\%res);
-}
