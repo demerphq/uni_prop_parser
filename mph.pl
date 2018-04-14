@@ -265,6 +265,7 @@ EOF_CODE
 sub print_main {
     my ($ofh)=@_;
     print $ofh <<'EOF_CODE';
+#include "mph_algo.h"
 int main(int argc, unsigned char *argv[]){
     int i;
     for (i=1; i<argc; i++) {
@@ -305,7 +306,7 @@ sub print_test_binary {
         or die "Failed to open '$file': $!";
     print_includes($ofh);
     print_defines($ofh, $defines);
-    print_algo($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows);
+    #print_algo($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows);
     print_main($ofh);
     close $ofh;
 }
@@ -333,8 +334,8 @@ my $hash= do {
 };
 
 my ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests)= make_mph_from_hash($hash);
+print_algo("mph_algo.h", $second_level, $seed1, $long_blob, $smart_blob, $rows);
 print_test_binary("mph_test.c", $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines);
-print_algo("mph_algo.c", $second_level, $seed1, $long_blob, $smart_blob, $rows);
 print_tests("mph_test.pl", $tests);
 
 __END__
