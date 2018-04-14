@@ -4,8 +4,10 @@ use Data::Dumper;
 use Carp;
 use Text::Wrap;
 
+my $DEBUG= 0;
 my $RSHIFT= 8;
 my $FNV_CONST= 16777619;
+
 sub _fnv {
     my ($key, $seed)= @_;
 
@@ -93,20 +95,22 @@ sub build_perfect_hash {
 }
 
 sub build_split_words {
-    my ($hash, $blob)= @_;
+    my ($hash, $blob, $old_res)= @_;
     $blob //= "-";
     my %res;
     KEY:
     foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %$hash) {
         my $best= 0;
         my $append= $key;
-        foreach my $idx (reverse 0..length($key)) {
+        foreach my $idx (reverse 0 .. length($key)) {
             my $prefix= substr($key,0,$idx);
             my $suffix= substr($key,$idx);
             my $i1= index($blob,$prefix)>=0;
             my $i2= index($blob,$suffix)>=0;
             if ($i1 and $i2) {
-                #print "$key => $idx\n";
+                if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
+                    print "changing: $key => $old_res->{$key} : $idx\n";
+                }
                 $res{$key}= $idx;
                 next KEY;
             } elsif ($i1) {
@@ -122,6 +126,9 @@ sub build_split_words {
             }
         }
         #print "$key => $best : $append\n";
+        if ($DEBUG and $old_res and $old_res->{$key} != $best) {
+            print "changing: $key => $old_res->{$key} : $best\n";
+        }
         $res{$key}= $best;
         $blob .= $append;
     }
@@ -189,7 +196,14 @@ sub build_array_of_struct {
 }
 
 sub print_algo {
-    my ($ofh,$second_level, $seed1, $long_blob, $smart_blob, $rows) = @_;
+    my ($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows) = @_;
+
+    if (!ref $ofh) {
+        my $file= $ofh;
+        undef $ofh;
+        open $ofh, ">", $file
+            or die "Failed to open '$file': $!";
+    }
 
     my $n= 0+@$second_level;
     my $data_size= 0+@$second_level * 8 + length $smart_blob;
@@ -296,6 +310,17 @@ sub print_test_binary {
     close $ofh;
 }
 
+sub make_mph_from_hash {
+    my $hash= shift;
+
+    # we do this twice because often we can find longer prefixes on the second pass.
+    my ($orig_smart_blob, $old_res)= build_split_words($hash);
+    my ($smart_blob, $res_to_split)= build_split_words($hash, $orig_smart_blob, $old_res);
+    my ($seed1, $second_level, $blob, $long_blob)= build_perfect_hash($hash, $res_to_split);
+    my ($rows, $defines, $tests)= build_array_of_struct($second_level, $smart_blob);
+    return ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests);
+}
+
 my $hash= do {
     no warnings;
     do "../perl/lib/unicore/Heavy.pl";
@@ -307,11 +332,9 @@ my $hash= do {
     \%hash
 };
 
-my ($smart_blob, $res_to_split)= build_split_words($hash);
-($smart_blob, $res_to_split)= build_split_words($hash,$smart_blob);
-my ($seed1, $second_level, $blob, $long_blob)= build_perfect_hash($hash, $res_to_split);
-my ($rows, $defines, $tests)= build_array_of_struct($second_level, $smart_blob);
+my ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests)= make_mph_from_hash($hash);
 print_test_binary("mph_test.c", $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines);
+print_algo("mph_algo.c", $second_level, $seed1, $long_blob, $smart_blob, $rows);
 print_tests("mph_test.pl", $tests);
 
 __END__
