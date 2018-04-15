@@ -6,7 +6,7 @@ blob length: 7766
 ref length: 31568
 data size: 39334 (%87.04)
 */
-const unsigned char const mph_blob[] =
+const unsigned char mph_blob[] =
     "-blk=unifiedcanadianaboriginalsyllabicsextendediscjkcompatibility"
     "ideographssupplementarabicmathematicalalphabeticsymbolsblk=combin"
     "ingdiacriticalmarksforblk=miscellaneoussymbolsandpictmathematical"
