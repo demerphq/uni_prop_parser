@@ -251,7 +251,7 @@ EOF_CODE
     print $ofh "const uint16_t MPH_BUCKETS = $n;\n\n";
 
     print $ofh "\n";
-    print $ofh "const struct $struct_name const $table_name\[$n] = {\n", join(",\n", @$rows)."\n};\n\n";
+    print $ofh "const struct $struct_name $table_name\[$n] = {\n", join(",\n", @$rows)."\n};\n\n";
     print $ofh <<"EOF_CODE";
 MPH_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;

@@ -145,7 +145,7 @@ const uint32_t MPH_FNV_CONST = 0x01000193;
 const uint16_t MPH_BUCKETS = 3946;
 
 
-const struct mph_bucket_info const mph_table[3946] = {
+const struct mph_bucket_info mph_table[3946] = {
   {     2,   438,  4892,   4,   2, ISMIAO },
   {     5,  1777,  5025,   7,   5, INARABICEXTA },
   {     4,  5221,  1116,   4,  24, ISKATAKANAPHONETICEXTENSIONS },
