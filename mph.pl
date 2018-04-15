@@ -25,7 +25,7 @@ sub build_perfect_hash {
 
     my $n= 0+keys %$hash;
     my $max_h= 0xFFFFFFFF;
-    $max_h -= $max_h % $n;
+    $max_h -= $max_h % $n; # this just avoids a tiny bit bias
     my $seed1= unpack("N", "Perl") - 1;
     my $hash_to_key;
     my $key_to_hash;
@@ -41,7 +41,7 @@ sub build_perfect_hash {
         foreach my $key (sort keys %$hash) {
             $length_all_keys += length $key;
             my $h= _fnv($key,$seed1);
-            next SEED1 if $h >= $max_h;
+            next SEED1 if $h >= $max_h; # check if this hash would bias, and if so find a new seed
             next SEED1 if exists $hash_to_key{$h};
             next SEED1 if $high{$h >> $RSHIFT}++;
             $hash_to_key{$h}= $key;
