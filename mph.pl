@@ -97,7 +97,7 @@ sub build_perfect_hash {
 
 sub build_split_words {
     my ($hash, $blob, $old_res)= @_;
-    $blob //= "-";
+    $blob //= "";
     my %res;
     KEY:
     foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %$hash) {
@@ -138,16 +138,18 @@ sub build_split_words {
 
 
 sub blob_as_code {
-    my ($blob)= @_;
+    my ($blob,$blob_name)= @_;
+
+    $blob_name ||= "mph_blob";
 
     # output the blob as C code.
-    my @code= ("const unsigned char mph_blob[] =\n");
+    my @code= (sprintf "const unsigned char %s[] =\n",$blob_name);
     my $blob_len= length $blob;
     while (length($blob)) {
         push @code, sprintf qq(    "%s"), substr($blob,0,65,"");
         push @code, length $blob ? "\n" : ";\n";
     }
-    push @code, "/* mph_blob length: $blob_len */\n";
+    push @code, "/* $blob_name length: $blob_len */\n";
     return join "",@code;
 }
 
@@ -183,21 +185,32 @@ sub build_array_of_struct {
     foreach my $row (@$second_level) {
         $defines{$row->{value}}= $row->{idx}+1;
         $tests{$row->{key}}= $defines{$row->{value}};
-        push @rows, sprintf("  { %5d, %5d, %5d, %3d, %3d, %s }",
+        my @u16= (
             $row->{seed2},
             index($blob,$row->{prefix}//0),
             index($blob,$row->{suffix}//0),
+        );
+        $_ > 0xFFFF and die "panic: value exceeds range of uint16_t"
+            for @u16;
+        my @u8= (
             length($row->{prefix}),
             length($row->{suffix}),
-            $row->{value},
-            $row->{key}
         );
+        $_ > 0xFF and die "panic: value exceeds range of uint8_t"
+            for @u8;
+        push @rows, sprintf("  { %5d, %5d, %5d, %3d, %3d, %s }",
+            @u16, @u8, $row->{value} );
     }
     return \@rows,\%defines,\%tests;
 }
 
 sub print_algo {
-    my ($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows) = @_;
+    my ($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows,
+        $blob_name, $struct_name, $table_name, $match_name) = @_;
+
+    $blob_name ||= "mph_blob";
+    $struct_name ||= "mph_struct";
+    $table_name ||= "mph_table";
 
     if (!ref $ofh) {
         my $file= $ofh;
@@ -216,11 +229,12 @@ sub print_algo {
     printf $ofh "blob length: %d\n", length $smart_blob;
     printf $ofh "ref length: %d\n", 0+@$second_level * 8;
     printf $ofh "data size: %d (%%%.2f)\n", $data_size, ($data_size / length $long_blob) * 100;
-    print $ofh "*/\n";
+    print $ofh "*/\n\n";
 
-    print $ofh blob_as_code($smart_blob);
-    print $ofh <<EOF_CODE;
-struct mph_meta {
+    print $ofh blob_as_code($smart_blob, $blob_name);
+    print $ofh <<"EOF_CODE";
+
+struct $struct_name {
     uint16_t seed2;
     uint16_t pfx;
     uint16_t sfx;
@@ -228,6 +242,7 @@ struct mph_meta {
     uint8_t  sfx_len;
     MPH_VALt value;
 };
+
 EOF_CODE
 
     print $ofh "#define MPH_RSHIFT $RSHIFT\n";
@@ -236,9 +251,9 @@ EOF_CODE
     print $ofh "const uint16_t MPH_BUCKETS = $n;\n\n";
 
     print $ofh "\n";
-    print $ofh "const struct mph_meta const mph[$n] = {\n", join(",\n", @$rows)."\n};\n";
-    print $ofh <<'EOF_CODE';
-MPH_VALt mph_match( const unsigned char * const key, const uint16_t key_len ) {
+    print $ofh "const struct $struct_name const $table_name\[$n] = {\n", join(",\n", @$rows)."\n};\n\n";
+    print $ofh <<"EOF_CODE";
+MPH_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key+key_len;
     uint32_t h= MPH_SEED1 + key_len;
@@ -246,18 +261,19 @@ MPH_VALt mph_match( const unsigned char * const key, const uint16_t key_len ) {
     uint32_t n;
     do {
         h  = (h ^ *ptr) * MPH_FNV_CONST;
-    } while (++ptr<ptr_end);
+    } while ( ++ptr < ptr_end );
     n= h % MPH_BUCKETS;
-    s = mph[n].seed2;
+    s = $table_name\[n].seed2;
     if (s) {
         h= (h >> MPH_RSHIFT) ^ s;
         n = h % MPH_BUCKETS;
         if (
-            ( mph[n].pfx_len + mph[n].sfx_len == key_len ) &&
-            ( memcmp(mph_blob + mph[n].pfx, key, mph[n].pfx_len) == 0 ) &&
-            ( !mph[n].sfx_len || memcmp(mph_blob + mph[n].sfx, key + mph[n].pfx_len, mph[n].sfx_len) == 0 )
+            ( $table_name\[n].pfx_len + $table_name\[n].sfx_len == key_len ) &&
+            ( memcmp($blob_name + $table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
+            ( !$table_name\[n].sfx_len || memcmp($blob_name + $table_name\[n].sfx,
+                key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) == 0 )
         ) {
-            return mph[n].value;
+            return $table_name\[n].value;
         }
     }
     return 0;
@@ -266,7 +282,7 @@ EOF_CODE
 }
 
 sub print_main {
-    my ($ofh,$h_file)=@_;
+    my ($ofh,$h_file,$match_name)=@_;
     print $ofh <<"EOF_CODE";
 #define MPH_VALt int16_t
 #include "$h_file"
@@ -276,7 +292,7 @@ int main(int argc, char *argv[]){
     for (i=1; i<argc; i++) {
         unsigned char *key = (unsigned char *)argv[i];
         int key_len = strlen(argv[i]);
-        printf("key: %s got: %d\\n", key, mph_match((unsigned char *)key,key_len));
+        printf("key: %s got: %d\\n", key, $match_name((unsigned char *)key,key_len));
     }
     return 0;
 }
@@ -309,13 +325,12 @@ sub print_tests {
 }
 
 sub print_test_binary {
-    my ($file,$h_file, $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines)= @_;
+    my ($file,$h_file, $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $match_name)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file': $!";
     print_includes($ofh);
     print_defines($ofh, $defines);
-    #print_algo($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows);
-    print_main($ofh,$h_file);
+    print_main($ofh,$h_file,$match_name);
     close $ofh;
 }
 
@@ -336,13 +351,18 @@ sub make_files {
     my $h_name= $base_name . "_algo.h";
     my $c_name= $base_name . "_test.c";
     my $p_name= $base_name . "_test.pl";
+    my $blob_name= $base_name . "_blob";
+    my $struct_name= $base_name . "_bucket_info";
+    my $table_name= $base_name . "_table";
+    my $match_name= $base_name . "_match";
 
     my ($second_level, $seed1, $long_blob,
         $smart_blob, $rows, $defines, $tests)= make_mph_from_hash( $hash );
     print_algo( $h_name,
-        $second_level, $seed1, $long_blob, $smart_blob, $rows );
+        $second_level, $seed1, $long_blob, $smart_blob, $rows,
+        $blob_name, $struct_name, $table_name, $match_name );
     print_test_binary( $c_name, $h_name,
-        $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines );
+        $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $match_name );
     print_tests( $p_name, $tests );
 }
 
