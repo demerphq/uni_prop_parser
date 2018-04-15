@@ -257,7 +257,8 @@ ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_
     uint32_t s;
     uint32_t n;
     do {
-        h  = (h ^ *ptr) * ${prefix}_FNV_CONST;
+        h ^= *ptr;
+        h *= ${prefix}_FNV_CONST;
     } while ( ++ptr < ptr_end );
     n= h % ${prefix}_BUCKETS;
     s = $table_name\[n].seed2;

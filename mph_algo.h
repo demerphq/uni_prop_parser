@@ -4102,7 +4102,8 @@ MPH_VALt mph_match( const unsigned char * const key, const uint16_t key_len ) {
     uint32_t s;
     uint32_t n;
     do {
-        h  = (h ^ *ptr) * MPH_FNV_CONST;
+        h ^= *ptr;
+        h *= MPH_FNV_CONST;
     } while ( ++ptr < ptr_end );
     n= h % MPH_BUCKETS;
     s = mph_table[n].seed2;
