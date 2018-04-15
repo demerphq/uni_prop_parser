@@ -273,8 +273,7 @@ int main(int argc, unsigned char *argv[]){
     for (i=1; i<argc; i++) {
         unsigned char *key = argv[i];
         int key_len = strlen(key);
-        printf("key: %s ", key);
-        printf("got: %d\\n", mph_match(key,key_len));
+        printf("key: %s got: %d\\n", key, mph_match(key,key_len));
     }
 }
 EOF_CODE
