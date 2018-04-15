@@ -12,7 +12,7 @@ my $FNV_CONST= 16777619;
 sub _fnv {
     my ($key, $seed)= @_;
 
-    my $hash = 0+$seed + length($key);
+    my $hash = 0+$seed;
     foreach my $char (split //, $key) {
         $hash = $hash ^ ord($char);
         $hash = ($hash * $FNV_CONST) & 0xFFFFFFFF;
@@ -26,7 +26,7 @@ sub build_perfect_hash {
     my $n= 0+keys %$hash;
     my $max_h= 0xFFFFFFFF;
     $max_h -= $max_h % $n;
-    my $seed1= 0xFEEDFACE - 1;
+    my $seed1= unpack("N", "Perl") - 1;
     my $hash_to_key;
     my $key_to_hash;
     my $length_all_keys;
@@ -252,8 +252,8 @@ EOF_CODE
     print $ofh <<"EOF_CODE";
 ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
-    const unsigned char * ptr_end= key+key_len;
-    uint32_t h= ${prefix}_SEED1 + key_len;
+    const unsigned char * ptr_end= key + key_len;
+    uint32_t h= ${prefix}_SEED1;
     uint32_t s;
     uint32_t n;
     do {
