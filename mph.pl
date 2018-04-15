@@ -24,43 +24,45 @@ sub build_perfect_hash {
     my ($hash, $split_pos)= @_;
 
     my $n= 0+keys %$hash;
-    my $seed1= 0xFEEDFACE;
+    my $max_h= 0xFFFFFFFF;
+    $max_h -= $max_h % $n;
+    my $seed1= 0xFEEDFACE - 1;
     my $hash_to_key;
     my $key_to_hash;
-    my $long_blob= " ";
+    my $length_all_keys;
+    my $key_buckets;
     SEED1:
-    for (;1;$seed1+=2) {
+    for ($seed1++;1;$seed1++) {
         my %hash_to_key;
         my %key_to_hash;
+        my %key_buckets;
         my %high;
-        $long_blob= "";
+        $length_all_keys= 0;
         foreach my $key (sort keys %$hash) {
-            $long_blob .= $key;
+            $length_all_keys += length $key;
             my $h= _fnv($key,$seed1);
+            next SEED1 if $h >= $max_h;
             next SEED1 if exists $hash_to_key{$h};
-            next SEED1 if exists $high{$h >> $RSHIFT};
+            next SEED1 if $high{$h >> $RSHIFT}++;
             $hash_to_key{$h}= $key;
             $key_to_hash{$key}= $h;
-            $high{$h >> $RSHIFT}++;
+            push @{$key_buckets{$h % $n}}, $key;
         }
         $hash_to_key= \%hash_to_key;
         $key_to_hash= \%key_to_hash;
+        $key_buckets= \%key_buckets;
         last SEED1;
     }
 
-    my %key_buckets;
-    foreach my $h (keys %$hash_to_key) {
-        push @{$key_buckets{$h % $n}}, $hash_to_key->{$h};
-    }
     my %token;
     my @first_level;
     my @second_level;
-    foreach my $first_idx (sort { @{$key_buckets{$b}} <=> @{$key_buckets{$a}} || $a <=> $b } keys %key_buckets) {
-        my $keys= $key_buckets{$first_idx};
+    foreach my $first_idx (sort { @{$key_buckets->{$b}} <=> @{$key_buckets->{$a}} || $a <=> $b } keys %$key_buckets) {
+        my $keys= $key_buckets->{$first_idx};
         my $seed2;
         SEED2:
         for ($seed2=1;1;$seed2++) {
-            next SEED1 if $seed2 > 0xFFFF;
+            goto FIND_SEED if $seed2 > 0xFFFF;
             my @idx= map {
                 ( ( ( ( ( $key_to_hash->{$_} >> $RSHIFT ) ^ $seed2 ) & 0xFFFFFFFF ) ) ) % $n
             } @$keys;
@@ -86,13 +88,7 @@ sub build_perfect_hash {
 
     }
     $second_level[$_]{seed2}= $first_level[$_]||0, $second_level[$_]{idx}= $_ for 0 .. $#second_level;
-    my $blob= " ";
-    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %token) {
-        if (index($blob,$key)<0) {
-            $blob.=$key;
-        }
-    }
-    return $seed1, \@second_level, $blob, $long_blob;
+    return $seed1, \@second_level, $length_all_keys;
 }
 
 sub build_split_words {
@@ -205,12 +201,13 @@ sub build_array_of_struct {
 }
 
 sub print_algo {
-    my ($ofh, $second_level, $seed1, $long_blob, $smart_blob, $rows,
-        $blob_name, $struct_name, $table_name, $match_name) = @_;
+    my ($ofh, $second_level, $seed1, $length_all_keys, $smart_blob, $rows,
+        $blob_name, $struct_name, $table_name, $match_name, $prefix) = @_;
 
     $blob_name ||= "mph_blob";
     $struct_name ||= "mph_struct";
     $table_name ||= "mph_table";
+    $prefix ||= "MPH";
 
     if (!ref $ofh) {
         my $file= $ofh;
@@ -225,10 +222,10 @@ sub print_algo {
     print $ofh "/*\n";
     printf $ofh "rows: %s\n", $n;
     printf $ofh "seed: %s\n", $seed1;
-    printf $ofh "full length of keys: %d\n", length $long_blob;
+    printf $ofh "full length of keys: %d\n", $length_all_keys;
     printf $ofh "blob length: %d\n", length $smart_blob;
     printf $ofh "ref length: %d\n", 0+@$second_level * 8;
-    printf $ofh "data size: %d (%%%.2f)\n", $data_size, ($data_size / length $long_blob) * 100;
+    printf $ofh "data size: %d (%%%.2f)\n", $data_size, ($data_size / $length_all_keys) * 100;
     print $ofh "*/\n\n";
 
     print $ofh blob_as_code($smart_blob, $blob_name);
@@ -240,33 +237,33 @@ struct $struct_name {
     uint16_t sfx;
     uint8_t  pfx_len;
     uint8_t  sfx_len;
-    MPH_VALt value;
+    ${prefix}_VALt value;
 };
 
 EOF_CODE
 
-    print $ofh "#define MPH_RSHIFT $RSHIFT\n";
-    printf $ofh "const uint32_t MPH_SEED1 = 0x%08x;\n", $seed1;
-    printf $ofh "const uint32_t MPH_FNV_CONST = 0x%08x;\n", $FNV_CONST;
-    print $ofh "const uint16_t MPH_BUCKETS = $n;\n\n";
+    print $ofh "#define ${prefix}_RSHIFT $RSHIFT\n";
+    print $ofh "#define ${prefix}_BUCKETS $n\n\n";
+    printf $ofh "const uint32_t ${prefix}_SEED1 = 0x%08x;\n", $seed1;
+    printf $ofh "const uint32_t ${prefix}_FNV_CONST = 0x%08x;\n\n", $FNV_CONST;
 
     print $ofh "\n";
-    print $ofh "const struct $struct_name $table_name\[$n] = {\n", join(",\n", @$rows)."\n};\n\n";
+    print $ofh "const struct $struct_name $table_name\[${prefix}_BUCKETS] = {\n", join(",\n", @$rows)."\n};\n\n";
     print $ofh <<"EOF_CODE";
-MPH_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
+${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key+key_len;
-    uint32_t h= MPH_SEED1 + key_len;
+    uint32_t h= ${prefix}_SEED1 + key_len;
     uint32_t s;
     uint32_t n;
     do {
-        h  = (h ^ *ptr) * MPH_FNV_CONST;
+        h  = (h ^ *ptr) * ${prefix}_FNV_CONST;
     } while ( ++ptr < ptr_end );
-    n= h % MPH_BUCKETS;
+    n= h % ${prefix}_BUCKETS;
     s = $table_name\[n].seed2;
     if (s) {
-        h= (h >> MPH_RSHIFT) ^ s;
-        n = h % MPH_BUCKETS;
+        h= (h >> ${prefix}_RSHIFT) ^ s;
+        n = h % ${prefix}_BUCKETS;
         if (
             ( $table_name\[n].pfx_len + $table_name\[n].sfx_len == key_len ) &&
             ( memcmp($blob_name + $table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
@@ -282,9 +279,9 @@ EOF_CODE
 }
 
 sub print_main {
-    my ($ofh,$h_file,$match_name)=@_;
+    my ($ofh,$h_file,$match_name,$prefix)=@_;
     print $ofh <<"EOF_CODE";
-#define MPH_VALt int16_t
+#define ${prefix}_VALt int16_t
 #include "$h_file"
 
 int main(int argc, char *argv[]){
@@ -325,12 +322,13 @@ sub print_tests {
 }
 
 sub print_test_binary {
-    my ($file,$h_file, $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $match_name)= @_;
+    my ($file,$h_file, $second_level, $seed1, $length_all_keys,
+        $smart_blob, $rows, $defines, $match_name, $prefix)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file': $!";
     print_includes($ofh);
     print_defines($ofh, $defines);
-    print_main($ofh,$h_file,$match_name);
+    print_main($ofh,$h_file,$match_name,$prefix);
     close $ofh;
 }
 
@@ -340,9 +338,9 @@ sub make_mph_from_hash {
     # we do this twice because often we can find longer prefixes on the second pass.
     my ($orig_smart_blob, $old_res)= build_split_words($hash);
     my ($smart_blob, $res_to_split)= build_split_words($hash, $orig_smart_blob, $old_res);
-    my ($seed1, $second_level, $blob, $long_blob)= build_perfect_hash($hash, $res_to_split);
+    my ($seed1, $second_level, $length_all_keys)= build_perfect_hash($hash, $res_to_split);
     my ($rows, $defines, $tests)= build_array_of_struct($second_level, $smart_blob);
-    return ($second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $tests);
+    return ($second_level, $seed1, $length_all_keys, $smart_blob, $rows, $defines, $tests);
 }
 
 sub make_files {
@@ -355,14 +353,16 @@ sub make_files {
     my $struct_name= $base_name . "_bucket_info";
     my $table_name= $base_name . "_table";
     my $match_name= $base_name . "_match";
+    my $prefix= uc($base_name);
 
-    my ($second_level, $seed1, $long_blob,
+    my ($second_level, $seed1, $length_all_keys,
         $smart_blob, $rows, $defines, $tests)= make_mph_from_hash( $hash );
     print_algo( $h_name,
-        $second_level, $seed1, $long_blob, $smart_blob, $rows,
-        $blob_name, $struct_name, $table_name, $match_name );
-    print_test_binary( $c_name, $h_name,
-        $second_level, $seed1, $long_blob, $smart_blob, $rows, $defines, $match_name );
+        $second_level, $seed1, $length_all_keys, $smart_blob, $rows,
+        $blob_name, $struct_name, $table_name, $match_name, $prefix );
+    print_test_binary( $c_name, $h_name, $second_level, $seed1, $length_all_keys,
+        $smart_blob, $rows, $defines,
+        $match_name, $prefix );
     print_tests( $p_name, $tests );
 }
 

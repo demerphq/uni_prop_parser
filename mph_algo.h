@@ -140,12 +140,13 @@ struct mph_bucket_info {
 };
 
 #define MPH_RSHIFT 8
+#define MPH_BUCKETS 3946
+
 const uint32_t MPH_SEED1 = 0xfeedface;
 const uint32_t MPH_FNV_CONST = 0x01000193;
-const uint16_t MPH_BUCKETS = 3946;
 
 
-const struct mph_bucket_info mph_table[3946] = {
+const struct mph_bucket_info mph_table[MPH_BUCKETS] = {
   {     2,   438,  4892,   4,   2, ISMIAO },
   {     5,  1777,  5025,   7,   5, INARABICEXTA },
   {     4,  5221,  1116,   4,  24, ISKATAKANAPHONETICEXTENSIONS },
