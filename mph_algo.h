@@ -6,7 +6,7 @@ blob length: 7766
 ref length: 31568
 data size: 39334 (%87.04)
 */
-const unsigned char * const mph_blob =
+const unsigned char const mph_blob[] =
     "-blk=unifiedcanadianaboriginalsyllabicsextendediscjkcompatibility"
     "ideographssupplementarabicmathematicalalphabeticsymbolsblk=combin"
     "ingdiacriticalmarksforblk=miscellaneoussymbolsandpictmathematical"
@@ -134,7 +134,7 @@ struct mph_meta {
     uint16_t sfx;
     uint8_t  pfx_len;
     uint8_t  sfx_len;
-    uint16_t value;
+    MPH_VALt value;
 };
 #define MPH_RSHIFT 8
 const uint32_t MPH_SEED1 = 0xfeedface;
@@ -4090,7 +4090,7 @@ const struct mph_meta const mph[3946] = {
   {     0,  3600,    39,  12,   8, INDEVANAGARIEXTENDED },
   {    30,  7450,     0,   4,   0, NEWA }
 };
-uint16_t mph_match( const unsigned char * const key, const uint16_t key_len ) {
+MPH_VALt mph_match( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key+key_len;
     uint32_t h= MPH_SEED1 + key_len;

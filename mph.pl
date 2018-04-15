@@ -141,7 +141,7 @@ sub blob_as_code {
     my ($blob)= @_;
 
     # output the blob as C code.
-    my @code= ("const unsigned char * const mph_blob =\n");
+    my @code= ("const unsigned char const mph_blob[] =\n");
     my $blob_len= length $blob;
     while (length($blob)) {
         push @code, sprintf qq(    "%s"), substr($blob,0,65,"");
@@ -226,7 +226,7 @@ struct mph_meta {
     uint16_t sfx;
     uint8_t  pfx_len;
     uint8_t  sfx_len;
-    uint16_t value;
+    MPH_VALt value;
 };
 EOF_CODE
 
@@ -238,7 +238,7 @@ EOF_CODE
     print $ofh "\n";
     print $ofh "const struct mph_meta const mph[$n] = {\n", join(",\n", @$rows)."\n};\n";
     print $ofh <<'EOF_CODE';
-uint16_t mph_match( const unsigned char * const key, const uint16_t key_len ) {
+MPH_VALt mph_match( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key+key_len;
     uint32_t h= MPH_SEED1 + key_len;
@@ -268,15 +268,17 @@ EOF_CODE
 sub print_main {
     my ($ofh,$h_file)=@_;
     print $ofh <<"EOF_CODE";
+#define MPH_VALt int16_t
 #include "$h_file"
 
-int main(int argc, unsigned char *argv[]){
+int main(int argc, char *argv[]){
     int i;
     for (i=1; i<argc; i++) {
-        unsigned char *key = argv[i];
-        int key_len = strlen(key);
-        printf("key: %s got: %d\\n", key, mph_match(key,key_len));
+        unsigned char *key = (unsigned char *)argv[i];
+        int key_len = strlen(argv[i]);
+        printf("key: %s got: %d\\n", key, mph_match((unsigned char *)key,key_len));
     }
+    return 0;
 }
 EOF_CODE
 }

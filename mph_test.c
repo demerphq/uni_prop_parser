@@ -3949,13 +3949,15 @@
 #define ZYYY                                             1318
 #define ZZZZ                                             3448
 
+#define MPH_VALt int16_t
 #include "mph_algo.h"
 
-int main(int argc, unsigned char *argv[]){
+int main(int argc, char *argv[]){
     int i;
     for (i=1; i<argc; i++) {
-        unsigned char *key = argv[i];
-        int key_len = strlen(key);
-        printf("key: %s got: %d\n", key, mph_match(key,key_len));
+        unsigned char *key = (unsigned char *)argv[i];
+        int key_len = strlen(argv[i]);
+        printf("key: %s got: %d\n", key, mph_match((unsigned char *)key,key_len));
     }
+    return 0;
 }
