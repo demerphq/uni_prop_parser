@@ -1,7 +1,10 @@
 use strict;
 use warnings;
-use Test::More tests => 3946;
-my @res;@res=`./mph_test 'adlam' 'adlm' 'aegeannumbers' 'age=na' 'age=unassigned' 'age=v100' 'age=v11' 'age=v20' 'age=v21' 'age=v30'`;
+use Test::More tests => 3948;
+my @res;@res=`./mph_test 'adlam/should-not-match' 'should-not-match/adlam'`;
+ok( $res[0] =~ /got: 0/,'proper prefix does not match');
+ok( $res[1] =~ /got: 0/,'proper suffix does not match');
+@res=`./mph_test 'adlam' 'adlm' 'aegeannumbers' 'age=na' 'age=unassigned' 'age=v100' 'age=v11' 'age=v20' 'age=v21' 'age=v30'`;
 ok($res[0]=~/got: (\d+)/ && $1 == 1526, 'adlam');
 ok($res[1]=~/got: (\d+)/ && $1 == 2788, 'adlm');
 ok($res[2]=~/got: (\d+)/ && $1 == 1044, 'aegeannumbers');

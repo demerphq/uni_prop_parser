@@ -4104,8 +4104,10 @@ uint16_t mph_match( const unsigned char * const key, const uint16_t key_len ) {
     if (s) {
         h= (h >> MPH_RSHIFT) ^ s;
         n = h % MPH_BUCKETS;
-        if ( memcmp(mph_blob + mph[n].pfx, key, mph[n].pfx_len)==0 &&
-            (!mph[n].sfx || memcmp(mph_blob + mph[n].sfx,key+mph[n].pfx_len,mph[n].sfx_len)==0)
+        if (
+            ( mph[n].pfx_len + mph[n].sfx_len == key_len ) &&
+            ( memcmp(mph_blob + mph[n].pfx, key, mph[n].pfx_len) == 0 ) &&
+            ( !mph[n].sfx_len || memcmp(mph_blob + mph[n].sfx, key + mph[n].pfx_len, mph[n].sfx_len) == 0 )
         ) {
             return mph[n].value;
         }

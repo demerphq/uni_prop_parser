@@ -252,8 +252,10 @@ uint16_t mph_match( const unsigned char * const key, const uint16_t key_len ) {
     if (s) {
         h= (h >> MPH_RSHIFT) ^ s;
         n = h % MPH_BUCKETS;
-        if ( memcmp(mph_blob + mph[n].pfx, key, mph[n].pfx_len)==0 &&
-            (!mph[n].sfx || memcmp(mph_blob + mph[n].sfx,key+mph[n].pfx_len,mph[n].sfx_len)==0)
+        if (
+            ( mph[n].pfx_len + mph[n].sfx_len == key_len ) &&
+            ( memcmp(mph_blob + mph[n].pfx, key, mph[n].pfx_len) == 0 ) &&
+            ( !mph[n].sfx_len || memcmp(mph_blob + mph[n].sfx, key + mph[n].pfx_len, mph[n].sfx_len) == 0 )
         ) {
             return mph[n].value;
         }
@@ -284,10 +286,13 @@ sub print_tests {
     my ($file, $tests_hash)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file' for writing: $!";
-    my $num_tests= 0+keys %$tests_hash;
+    my $num_tests= 2 + keys %$tests_hash;
     print $ofh "use strict;\nuse warnings;\nuse Test::More tests => $num_tests;\nmy \@res;";
     my $bytes= 0;
     my @tests= sort keys %$tests_hash;
+    print $ofh "\@res=`./mph_test '$tests[0]/should-not-match' 'should-not-match/$tests[0]'`;\n";
+    print $ofh "ok( \$res[0] =~ /got: 0/,'proper prefix does not match');\n";
+    print $ofh "ok( \$res[1] =~ /got: 0/,'proper suffix does not match');\n";
     while (@tests) {
         my @batch= splice @tests,0,10;
         my $batch_args= join " ", map { "'$_'" } @batch;
