@@ -8,7 +8,7 @@ use List::Util qw / min /;
 use Data::Dumper; $Data::Dumper::Sortkeys = 1;
 
 my $INF   = 1e9;
-my $DEBUG= 0;
+my $DEBUG= $ENV{DEBUG} || 0;
 my $RSHIFT= 8;
 my $FNV_CONST= 16777619;
 
@@ -119,9 +119,9 @@ sub build_split_words {
         foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %parts) {
             $blob .= $key . "\0";
         }
-        printf "Using preprocessing, initial blob size %d\n", length($blob);
+        printf "Using preprocessing, initial blob size %d\n", length($blob) if $DEBUG;
     } else {
-        printf "No preprocessing, initial blob size %d\n", length($blob);
+        printf "No preprocessing, initial blob size %d\n", length($blob) if $DEBUG;
     }
     my %res;
     my $count;
@@ -216,7 +216,7 @@ sub build_split_words {
         }
 
     
-        print "$best_prefix|$best_suffix => $best => $append\n";
+        print "$best_prefix|$best_suffix => $best => $append\n" if $DEBUG;
         $appended{$best_prefix}++;
         $appended{$best_suffix}++;
     }
@@ -225,12 +225,14 @@ sub build_split_words {
         $b2 .= $key unless index($b2,$key)>=0;
     }
     if (length($b2)<length($blob)) {
-        printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2);
+        printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2)
+            if $DEBUG;
         $blob= $b2;
         %appended=();
         goto REDO;
     } else {
-        printf "Length old blob: %d length new blob: %d, keeping old blob\n", length($blob),length($b2);
+        printf "Length old blob: %d length new blob: %d, keeping old blob\n", length($blob),length($b2)
+            if $DEBUG;
     }
     die sprintf "not same size? %d != %d", 0+keys %res, 0+keys %$hash unless keys %res == keys %$hash;
     return ($blob,\%res);
@@ -723,12 +725,12 @@ sub make_mph_from_hash {
     push @tuples, ["ilya",build_split_words_ilya($hash)];
 
     @tuples= sort {length($a->[1])<=>length($b->[1])} @tuples;
-
+    if ($DEBUG) {
+        printf "strategy: %s length %d\n", $_->[0], length($_->[1])
+            for @tuples;
+    }
 
     my ($strategy, $blob, $split_points)= @{$tuples[0]};
-
-    warn sprintf "Best result was '%s', length %d\n", $strategy, length($blob);
-
     my ($seed1, $second_level, $length_all_keys)= build_perfect_hash($hash, $split_points);
     my ($rows, $defines, $tests)= build_array_of_struct($second_level, $blob);
     return ($second_level, $seed1, $length_all_keys, $blob, $rows, $defines, $tests);
