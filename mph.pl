@@ -4,7 +4,7 @@ use warnings;
 use feature 'say';
 use Carp;
 use Text::Wrap;
-use List::Util qw / min /;
+use List::Util qw / min shuffle /;
 use Data::Dumper; $Data::Dumper::Sortkeys = 1;
 
 my $INF   = 1e9;
@@ -464,7 +464,8 @@ sub get_words_combination {
 }
 
 sub build_split_words_ilya {
-    my ($h) = @_;
+    my ($h,$s) = @_;
+    #srand(22);
 
     my @words= sort keys %$h;
     my %splits;
@@ -484,25 +485,41 @@ sub build_split_words_ilya {
         $splits{$word} = $word_splits;
     }
 
-    @words =
-      sort { length($a) <=> length($b) || $a cmp $b } @words;
-    my $s = get_words_combination(\@words,\%splits);
+    @words = sort { length($a) <=> length($b) || $a cmp $b } @words;
+    $s = get_words_combination(\@words,\%splits);
 
     say($s) if $DEBUG;
     say( length $s ) if $DEBUG;
 
-    ($s, $split_points)= squeeze( \@words, \%splits, \$s );
-    @words = reverse @words;
-    ($s, $split_points)= squeeze( \@words, \%splits, \$s );
-    @words = reverse @words;
-    ($s, $split_points)= squeeze( \@words, \%splits, \$s );
+     while (1) {
+        @words = reverse @words;
+        my ($new_s, $new_split_points)= squeeze( \@words, \%splits, \$s );
+        if (!$split_points || length($new_s) < length($s)) {
+            $s= $new_s;
+            $split_points= $new_split_points;
+        } else {
+            last;
+        }
+    }
 
-    # while (1) {
-    # 	@words = shuffle @words;
-    # 	my $new_s = squeeze(\$s);
-    # 	last if length($s) == length($new_s);
-    # 	$s = $new_s;
-    # }
+    my $same= 0;
+    my $max_same= $ENV{MAX_SAME} || 5;
+    my $counter= 0;
+    while ($ENV{RANDOMIZE} && $same < $max_same) {
+        if (++$counter) {
+            @words = shuffle @words;
+        } else {
+            @words = reverse @words;
+        }
+        my ($new_s,$new_split_points) = squeeze(\@words, \%splits, \$s);
+        if (length($s) > length($new_s)) {
+            $s = $new_s;
+            $split_points= $new_split_points;
+            $same= 0;
+        } elsif (length($s) <= length($new_s)) {
+            $same++;
+        }
+    }
 
     say $s if $DEBUG;
     say( "Result: " . length($s) ) if $DEBUG;
