@@ -94,6 +94,12 @@ sub build_perfect_hash {
 
 sub build_split_words {
     my ($hash, $preprocess, $blob, $old_res)= @_;
+    $|++;
+    #build_split_words_ga(@_);
+
+    my $score;
+    #$score= build_split_words2(@_);
+
     my %appended;
     $blob //= "";
     if ($preprocess) {
@@ -118,12 +124,16 @@ sub build_split_words {
         printf "No preprocessing, initial blob size %d\n", length($blob);
     }
     my %res;
+    my $count;
 
     REDO:
     %res= ();
+    $count= 0;
+
     KEY:
     foreach my $key (
         sort {
+            (($score->{$b}//=0) <=> ($score->{$a}//=0)) ||
             (length($b) <=> length($a)) ||
             ($a cmp $b)
         }
@@ -140,12 +150,13 @@ sub build_split_words {
         }
         my $best= length($key);
         my $append= $key;
-        my $min= 0; #length $key >= 4 ? 4 : 0;
         my $best_prefix;
         my $best_suffix;
-        foreach my $idx (reverse $min .. length($key)) {
+        my $min= $count++ < 10 ? 4 : 0;
+        foreach my $idx (reverse 0 .. length($key)) {
             my $prefix= substr($key,0,$idx);
             my $suffix= substr($key,$idx);
+            next if (length($prefix) and length($prefix)<$min) or (length($suffix) and length($suffix)<$min);
             my $i1= index($blob,$prefix)>=0;
             my $i2= index($blob,$suffix)>=0;
             if ($i1 and $i2) {
@@ -175,9 +186,37 @@ sub build_split_words {
         if ($DEBUG and $old_res and $old_res->{$key} != $best) {
             print "changing: $key => $old_res->{$key} : $best\n";
         }
-        #print "$best_prefix|$best_suffix => $best => $append\n";
         $res{$key}= $best;
-        $blob .= $append;
+
+        my $cut=0;
+        for my $i (1..length($append)) {
+            if (substr($append,0,$i) eq substr($blob,-$i)) {
+                $cut=$i;
+            } else {
+                last;
+            }
+        }
+        if ($cut) {
+            $append= substr($append,$cut);
+            $blob .= $append;
+        } else {
+            for my $i (1 .. length($append)) {
+                if (substr($append,-$i) eq substr($blob,0,$i)) {
+                    $cut=$i;
+                } else {
+                    last;
+                }
+            }
+            if ($cut) {
+                $append= substr($append,0,$cut);
+                $blob= $append . $blob;
+            } else {
+                $blob .= $append;
+            }
+        }
+
+    
+        print "$best_prefix|$best_suffix => $best => $append\n";
         $appended{$best_prefix}++;
         $appended{$best_suffix}++;
     }
@@ -468,6 +507,13 @@ unless (caller) {
         my $munged= uc($key);
         $munged=~s/\W/__/g;
         $hash{$key} = $munged;
+    }
+
+    if (@ARGV) {
+        foreach my $key (keys %hash) {
+            print $key,"\n";
+        }
+        exit;
     }
 
     my $name= shift @ARGV;
