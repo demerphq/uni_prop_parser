@@ -783,6 +783,9 @@ sub make_files {
 }
 
 unless (caller) {
+    if ($ENV{SRAND}) {
+        srand($ENV{SRAND});
+    }
     my %hash;
     {
         no warnings;
