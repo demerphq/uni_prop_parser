@@ -447,24 +447,21 @@ sub squeeze {
 sub get_words_combination {
     my ($words,$splits)= @_;
     my $res = "";
+    WORD:
     for my $word (@$words) {
-        my $already_have = '';
         if ( index( $res, $word ) != -1 ) {
-            $already_have = 1;
+            next WORD;
         }
         else {
             for my $split ( @{ $splits->{$word} } ) {
                 if (   index( $res, $split->{w1} ) != -1
                     && index( $res, $split->{w2} ) != -1 )
                 {
-                    $already_have = 1;
-                    last;
+                    next WORD;
                 }
             }
         }
-        if ( !$already_have ) {
-            $res .= $word;
-        }
+        $res .= $word;
     }
     return $res;
 }
