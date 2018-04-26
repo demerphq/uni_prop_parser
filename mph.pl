@@ -361,6 +361,7 @@ sub squeeze {
         change_all_popularities( \%occurrences_mem, \@popularity, $sref, \$w, $cnt / length($w) );
     }
 
+    WORD:
     for my $word (@$words) {
         my $best_pos1  = -1;
         my $best_pos2  = -1;
@@ -370,15 +371,14 @@ sub squeeze {
         };
         my $best_split = undef;
 
-        my $for_free = '';
 
         {
             my $cand = get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$word );
             if ( $cand->{position} != -1 ) {
                 my $cand_score = $cand->{score};
                 if ( $cand_score->{reused_digits} == length($word) ) {
-                    $for_free = 1;
                     $split_points{$word} = 0;
+                    next WORD;
                 }
                 elsif ( compare_score( $cand_score, $best_score ) > 0 ) {
                     $best_score = $cand_score;
@@ -389,8 +389,6 @@ sub squeeze {
             }
         }
 
-        next if $for_free;
-
         for my $split ( @{ $splits->{$word} } ) {
             my $cand2 = get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$split->{w2} );
             if ( $cand2->{position} != -1 ) {
@@ -399,9 +397,8 @@ sub squeeze {
                     my $cand_score =
                       merge_score( $cand1->{score}, $cand2->{score} );
                     if ( $cand_score->{reused_digits} == length($word) ) {
-                        $for_free = 1;
                         $split_points{$word} = $split->{split_point};
-                        last;
+                        next WORD;
                     }
                     if ( compare_score( $cand_score, $best_score ) > 0 ) {
                         $best_score = $cand_score;
@@ -412,8 +409,6 @@ sub squeeze {
                 }
             }
         }
-
-        next if $for_free;
 
         # apply high pop to used characters of the champion
         if ( defined $best_split ) {
