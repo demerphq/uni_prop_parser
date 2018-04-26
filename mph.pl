@@ -435,6 +435,12 @@ sub squeeze {
         }
     }
     say( $n. '->' . ( length $res ) ) if $DEBUG;
+
+    # ilya's algorithm chooses to "split" full strings at 0, so that the prefix is empty
+    # and the suffix contains the full key, mph wants it the other way around, as we do
+    # the prefix check first. so we correct it at the end here.
+    $split_points{$_} ||= length($_) for keys %split_points;
+
     return ($res, \%split_points);
 }
 
