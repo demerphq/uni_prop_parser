@@ -12,6 +12,17 @@ my $DEBUG= $ENV{DEBUG} || 0;
 my $RSHIFT= 8;
 my $FNV_CONST= 16777619;
 
+sub _index {
+    my ($buf,$string)= @_;
+
+    my $l= length $string;
+    if (!$l) { return 0 }
+    elsif ($l==1) { return ord($string) }
+    elsif ($l==2) { return unpack "v", $string }
+    return index $buf, $string
+}
+
+
 sub _fnv {
     my ($key, $seed)= @_;
 
@@ -66,7 +77,7 @@ sub build_perfect_hash {
         my $seed2;
         SEED2:
         for ($seed2=1;1;$seed2++) {
-            goto FIND_SEED if $seed2 > 0xFFFF;
+            goto SEED1 if $seed2 > 0xFFFF;
             my @idx= map {
                 ( ( ( $key_to_hash->{$_} >> $RSHIFT ) ^ $seed2 ) & 0xFFFFFFFF ) % $n 
             } @$keys;
@@ -140,7 +151,7 @@ sub build_split_words {
         keys %$hash
     ) {
         next if exists $res{$key};
-        if (index($blob,$key) >= 0 ) {
+        if (_index($blob,$key) >= 0 ) {
             my $idx= length($key);
             if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
                 print "changing: $key => $old_res->{$key} : $idx\n";
@@ -157,8 +168,8 @@ sub build_split_words {
             my $prefix= substr($key,0,$idx);
             my $suffix= substr($key,$idx);
             next if (length($prefix) and length($prefix)<$min) or (length($suffix) and length($suffix)<$min);
-            my $i1= index($blob,$prefix)>=0;
-            my $i2= index($blob,$suffix)>=0;
+            my $i1= _index($blob,$prefix)>=0;
+            my $i2= _index($blob,$suffix)>=0;
             if ($i1 and $i2) {
                 if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
                     print "changing: $key => $old_res->{$key} : $idx\n";
@@ -222,7 +233,7 @@ sub build_split_words {
     }
     my $b2 = "";
     foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %appended) {
-        $b2 .= $key unless index($b2,$key)>=0;
+        $b2 .= $key unless _index($b2,$key)>=0;
     }
     if (length($b2)<length($blob)) {
         printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2)
@@ -444,13 +455,13 @@ sub get_words_combination {
     my $res = "";
     WORD:
     for my $word (@$words) {
-        if ( index( $res, $word ) != -1 ) {
+        if ( _index( $res, $word ) != -1 ) {
             next WORD;
         }
         else {
             for my $split ( @{ $splits->{$word} } ) {
-                if (   index( $res, $split->{w1} ) != -1
-                    && index( $res, $split->{w2} ) != -1 )
+                if (   _index( $res, $split->{w1} ) != -1
+                    && _index( $res, $split->{w2} ) != -1 )
                 {
                     next WORD;
                 }
@@ -578,8 +589,8 @@ sub build_array_of_struct {
         $tests{$row->{key}}= $defines{$row->{value}};
         my @u16= (
             $row->{seed2},
-            index($blob,$row->{prefix}//0),
-            index($blob,$row->{suffix}//0),
+            _index($blob,$row->{prefix}//0),
+            _index($blob,$row->{suffix}//0),
         );
         $_ > 0xFFFF and die "panic: value exceeds range of uint16_t"
             for @u16;
@@ -589,8 +600,8 @@ sub build_array_of_struct {
         );
         $_ > 0xFF and die "panic: value exceeds range of uint8_t"
             for @u8;
-        push @rows, sprintf("  { %5d, %5d, %5d, %3d, %3d, %s }",
-            @u16, @u8, $row->{value} );
+        push @rows, sprintf("  { %5d, %5d, %5d, %3d, %3d, %s } /* '%s' : '%s' */",
+            @u16, @u8, $row->{value}, $row->{prefix}, $row->{suffix} );
     }
     return \@rows,\%defines,\%tests;
 }
