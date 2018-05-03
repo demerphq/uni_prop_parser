@@ -193,6 +193,7 @@ sub build_split_words_greedy {
                 print "changing: $key => $old_res->{$key} : $idx\n";
             }
             $res{$key}= $idx;
+            $appended{$key}++;
         }
         next if exists $res{$key};
         my $best= length($key);
@@ -246,7 +247,7 @@ sub build_split_words_greedy {
     foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %appended) {
         $b2 .= $key unless _index($b2,$key)>=0;
     }
-    if (length($b2)<length($blob)) {
+    if (length($b2)<length($blob) or (length($b2)==length($blob) && $b2 ne $blob)) {
         printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2)
             if $DEBUG;
         $blob= $b2;
@@ -537,7 +538,7 @@ sub build_split_words_ilya {
     my $max_same= $ENV{MAX_SAME} || 5;
     my $counter= 0;
     while ($ENV{RANDOMIZE} && $same < $max_same) {
-        if (++$counter) {
+        if (++$counter % 2) {
             @words = shuffle @words;
         } else {
             @words = reverse @words;
@@ -792,7 +793,6 @@ sub make_mph_from_hash {
     push @tuples, ["greedy",build_split_words_greedy($hash,0)];
     push @tuples, ["greedy-smart",build_split_words_greedy($hash,1)];
     push @tuples, ["ilya",build_split_words_ilya($hash)];
-    #push @tuples, ["ilya2",build_split_words_ilya($hash,$tuples[1][1])];
 
     @tuples= sort {length($a->[1])<=>length($b->[1])} @tuples;
     if ($DEBUG) {
