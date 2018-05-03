@@ -645,6 +645,7 @@ sub print_algo {
     my $data_size= 0+@$second_level * 8 + length $smart_blob;
 
     print $ofh "/*\n";
+    printf $ofh "srand: %d\n", $ENV{SRAND};
     printf $ofh "rows: %s\n", $n;
     printf $ofh "seed: %s\n", $seed1;
     printf $ofh "full length of keys: %d\n", $length_all_keys;
@@ -767,16 +768,17 @@ sub _fixup_splitpoints {
     my ($blob,$split_points)= @_;
     KEY:
     foreach my $key (keys %$split_points) {
+        if (_index($blob,$key)>=0) {
+            $split_points->{$key}= length $key;
+            next KEY;
+        }
         for (my $len= length $key; $len; $len--) {
             my ($l,$r)= unpack "A".$len."A*", $key;
-            if (_index($blob,$l)>=0 && _index($blob,$r)>=0) {
+            if (($split_points->{$key}>2 or $len>$split_points->{$key}) && _index($blob,$l)>=0 && _index($blob,$r)>=0) {
                 $split_points->{$key}= $len;
                 next KEY;
             }
         }
-        # if we get here we cannot construct the key from the buffer
-        # and the implied search rules.
-        die "bad key: $key";
     }
 }
 
@@ -833,6 +835,8 @@ sub make_files {
 unless (caller) {
     if ($ENV{SRAND}) {
         srand($ENV{SRAND});
+    } else {
+        $ENV{SRAND}= srand();
     }
     my %hash;
     {
