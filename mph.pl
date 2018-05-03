@@ -667,6 +667,11 @@ EOF_CODE
     print $ofh "\n";
     print $ofh "const struct $struct_name $table_name\[${prefix}_BUCKETS] = {\n", join(",\n", @$rows)."\n};\n\n";
     print $ofh <<"EOF_CODE";
+#define MYCMP(b,s1_o,s2,n) ((n==0) ? 0 : \\
+                          (n==1) ? (((char)s1_o)==*((char *)s2) ? 0 : -1) : \\
+                          (n==2) ? (((uint16_t)s1_o)==*((uint16_t*)s2) ? 0 : -1) : \\
+                          memcmp(b+s1_o,s2,n))
+
 ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key + key_len;
@@ -684,9 +689,8 @@ ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_
         n = h % ${prefix}_BUCKETS;
         if (
             ( $table_name\[n].pfx_len + $table_name\[n].sfx_len == key_len ) &&
-            ( memcmp($blob_name + $table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
-            ( !$table_name\[n].sfx_len || memcmp($blob_name + $table_name\[n].sfx,
-                key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) == 0 )
+            ( MYCMP($blob_name,$table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
+            ( MYCMP($blob_name,$table_name\[n].sfx, key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) == 0 )
         ) {
             return $table_name\[n].value;
         }
