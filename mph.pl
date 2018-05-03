@@ -106,29 +106,67 @@ sub build_perfect_hash {
     return $seed1, \@second_level, $length_all_keys;
 }
 
-sub build_split_words {
+sub _trie_r {
+    my ($node, $counts, $path, $score)= @_;
+    #push @$counts,[ $path, $node->{''} ] if $node->{''} and $node->{''}>1;
+    push @$counts,[ $path, $score ] if $score and $score>1;
+    foreach my $char (sort keys %$node) {
+        next unless length $char;
+        _trie_r($node->{$char},$counts,$path.$char, ($score||0)+($node->{''}||0));
+    }
+}
+
+sub _trie {
+    my ($hash) =@_;
+    my %trie;
+    foreach my $key (keys %$hash) {
+        my $node= \%trie;
+        foreach my $char (split //, $key) {
+            $node= ($node->{$char} ||= {});
+            $node->{''}++;
+        }
+    }
+    my @counts;
+    _trie_r(\%trie,\@counts,"");
+    @counts=sort {
+        ($b->[1]*length($b->[0])) <=> ($a->[1]*length($a->[0])) ||
+        ($b->[1]) <=> ($a->[1]) ||
+        length($b->[0]) <=> length($a->[0]) ||
+        $a->[0] cmp $b->[0]
+    } @counts;
+    my $blob= "";
+    @counts= grep {
+        my $idx= index($blob,$_->[0]);
+        if ($idx<0) {
+            $blob .= $_->[0]. "\0";
+        } else {
+            ();
+        }
+    } @counts;
+    return $blob;
+}
+
+sub build_split_words_greedy {
     my ($hash, $preprocess, $blob, $old_res)= @_;
     $|++;
 
-    my $score;
     my %appended;
     $blob //= "";
     if ($preprocess) {
-        my %parts;
+        my %pre;
+        my %suf;
         foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %$hash) {
-            my ($prefix,$suffix);
-            if ($key=~/^([^=]+=)([^=]+)\z/) {
-                ($prefix,$suffix)= ($1, $2);
-                $parts{$suffix}++;
-                #$parts{$prefix}++;
+            next if index($blob,$key)>=0;
+            if ($key=~/^([^=]+=)([^=]+)\z/ || $key=~/^(i[sn])(\w+)\z/) {
+                my ($prefix,$suffix)= ($1, $2);
+                if (!$pre{$prefix}++ and !$suf{$suffix}++ ) {
+                    $blob .= $key."\0";
+                } elsif ($pre{$prefix}) {
+                    $blob .= $suffix."\0" if _index($blob,$suffix) < 0 and !$suf{$suffix}++;
+                }
             } else {
-                $prefix= $key;
-                $parts{$prefix}++;
+                $blob .= $key . "\0" if _index($blob,$key) < 0;
             }
-
-        }
-        foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %parts) {
-            $blob .= $key . "\0";
         }
         printf "Using preprocessing, initial blob size %d\n", length($blob) if $DEBUG;
     } else {
@@ -144,26 +182,24 @@ sub build_split_words {
     KEY:
     foreach my $key (
         sort {
-            (($score->{$b}//=0) <=> ($score->{$a}//=0)) ||
             (length($b) <=> length($a)) ||
-            ($a cmp $b)
+            ($b cmp $a)
         }
         keys %$hash
     ) {
-        next if exists $res{$key};
         if (_index($blob,$key) >= 0 ) {
             my $idx= length($key);
             if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
                 print "changing: $key => $old_res->{$key} : $idx\n";
             }
             $res{$key}= $idx;
-            next KEY;
         }
+        next if exists $res{$key};
         my $best= length($key);
         my $append= $key;
         my $best_prefix;
         my $best_suffix;
-        my $min= $count++ < 10 ? 4 : 0;
+        my $min= 0;
         foreach my $idx (reverse 0 .. length($key)) {
             my $prefix= substr($key,0,$idx);
             my $suffix= substr($key,$idx);
@@ -198,36 +234,11 @@ sub build_split_words {
             print "changing: $key => $old_res->{$key} : $best\n";
         }
         $res{$key}= $best;
+        $blob .= $append;
 
-        my $cut=0;
-        for my $i (1..length($append)) {
-            if (substr($append,0,$i) eq substr($blob,-$i)) {
-                $cut=$i;
-            } else {
-                last;
-            }
-        }
-        if ($cut) {
-            $append= substr($append,$cut);
-            $blob .= $append;
-        } else {
-            for my $i (1 .. length($append)) {
-                if (substr($append,-$i) eq substr($blob,0,$i)) {
-                    $cut=$i;
-                } else {
-                    last;
-                }
-            }
-            if ($cut) {
-                $append= substr($append,0,$cut);
-                $blob= $append . $blob;
-            } else {
-                $blob .= $append;
-            }
-        }
-
-    
-        print "$best_prefix|$best_suffix => $best => $append\n" if $DEBUG;
+        print "$key  $best_prefix|$best_suffix => $best => '$append'\n"
+        #."$blob\n\n"
+              if $DEBUG;
         $appended{$best_prefix}++;
         $appended{$best_suffix}++;
     }
@@ -506,7 +517,7 @@ sub build_split_words_ilya {
     }
 
     @words = sort { length($a) <=> length($b) || $a cmp $b } @words;
-    $s = get_words_combination(\@words,\%splits);
+    $s //= get_words_combination(\@words,\%splits);
 
     say($s) if $DEBUG;
     say( length $s ) if $DEBUG;
@@ -546,9 +557,6 @@ sub build_split_words_ilya {
 
     return $s, $split_points;
 }
-
-
-
 
 sub blob_as_code {
     my ($blob,$blob_name)= @_;
@@ -754,6 +762,24 @@ sub print_test_binary {
     close $ofh;
 }
 
+# make sure we split such that we test the longest string first.
+sub _fixup_splitpoints {
+    my ($blob,$split_points)= @_;
+    KEY:
+    foreach my $key (keys %$split_points) {
+        for (my $len= length $key; $len; $len--) {
+            my ($l,$r)= unpack "A".$len."A*", $key;
+            if (_index($blob,$l)>=0 && _index($blob,$r)>=0) {
+                $split_points->{$key}= $len;
+                next KEY;
+            }
+        }
+        # if we get here we cannot construct the key from the buffer
+        # and the implied search rules.
+        die "bad key: $key";
+    }
+}
+
 sub make_mph_from_hash {
     my $hash= shift;
 
@@ -761,9 +787,10 @@ sub make_mph_from_hash {
     my @keys= sort {length($b) <=> length($a) || $a cmp $b } keys %$hash;
 
     my @tuples;
-    push @tuples, ["greedy",build_split_words($hash,0)];
-    push @tuples, ["greedy-smart",build_split_words($hash,1)];
+    push @tuples, ["greedy",build_split_words_greedy($hash,0)];
+    push @tuples, ["greedy-smart",build_split_words_greedy($hash,1)];
     push @tuples, ["ilya",build_split_words_ilya($hash)];
+    #push @tuples, ["ilya2",build_split_words_ilya($hash,$tuples[1][1])];
 
     @tuples= sort {length($a->[1])<=>length($b->[1])} @tuples;
     if ($DEBUG) {
@@ -772,6 +799,9 @@ sub make_mph_from_hash {
     }
 
     my ($strategy, $blob, $split_points)= @{$tuples[0]};
+
+    _fixup_splitpoints($blob,$split_points);
+
     my ($seed1, $second_level, $length_all_keys)= build_perfect_hash($hash, $split_points);
     my ($rows, $defines, $tests)= build_array_of_struct($second_level, $blob);
     return ($second_level, $seed1, $length_all_keys, $blob, $rows, $defines, $tests);
