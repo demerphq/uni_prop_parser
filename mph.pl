@@ -611,7 +611,7 @@ sub build_array_of_struct {
         );
         $_ > 0xFF and die "panic: value exceeds range of uint8_t"
             for @u8;
-        push @rows, sprintf("  { %5d, %5d, %5d, %3d, %3d, %s } /* '%s' : '%s' */",
+        push @rows, sprintf("  { 0x%04x, 0x%04x, 0x%04x, 0x%02x, 0x%02x, %s } /* '%s' : '%s' */",
             @u16, @u8, $row->{value}, $row->{prefix}, $row->{suffix} );
     }
     return \@rows,\%defines,\%tests;
@@ -667,10 +667,10 @@ EOF_CODE
     print $ofh "\n";
     print $ofh "const struct $struct_name $table_name\[${prefix}_BUCKETS] = {\n", join(",\n", @$rows)."\n};\n\n";
     print $ofh <<"EOF_CODE";
-#define MYCMP(b,s1_o,s2,n) ((n==0) ? 0 : \\
-                          (n==1) ? (((char)s1_o)==*((char *)s2) ? 0 : -1) : \\
-                          (n==2) ? (((uint16_t)s1_o)==*((uint16_t*)s2) ? 0 : -1) : \\
-                          memcmp(b+s1_o,s2,n))
+#define MYEQ(b,s1_o,s2,n) ( (!(n)) ? 1 : \\
+                            ((n)==1) ? (((uint8_t)(s1_o))==*((uint8_t*)(s2))) : \\
+                            ((n)==2) ? (((uint16_t)(s1_o))==*((uint16_t*)(s2))) : \\
+                            (memcmp(((b)+(s1_o)),(s2),(n))==0) )
 
 ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
@@ -689,8 +689,8 @@ ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_
         n = h % ${prefix}_BUCKETS;
         if (
             ( $table_name\[n].pfx_len + $table_name\[n].sfx_len == key_len ) &&
-            ( MYCMP($blob_name,$table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
-            ( MYCMP($blob_name,$table_name\[n].sfx, key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) == 0 )
+            ( MYEQ($blob_name,$table_name\[n].pfx, key, $table_name\[n].pfx_len) ) &&
+            ( MYEQ($blob_name,$table_name\[n].sfx, key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) )
         ) {
             return $table_name\[n].value;
         }
