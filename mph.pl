@@ -271,6 +271,7 @@ sub get_occurrences {
 
 sub change_popularity {
     my ( $popularity, $i, $len, $diff ) = @_;
+    return if $len <= 2;
     for ( $i .. $i + $len - 1 ) {
         $popularity->[$_] += $diff;
     }
@@ -308,8 +309,9 @@ sub merge_score {
 
 sub change_all_popularities {
     my ( $occurences_mem, $popularity, $sref, $wref, $diff ) = @_;
-    my $occurrences = get_occurrences( $occurences_mem, $sref, $wref );
     my $wlen = length $$wref;
+    return if $wlen <= 2;
+    my $occurrences = get_occurrences( $occurences_mem, $sref, $wref );
     for my $i (@$occurrences) {
         for ( $i .. $i + $wlen - 1 ) {
             $popularity->[$_] += $diff;
@@ -327,13 +329,22 @@ sub compare_score {
 
 sub get_most_popular_position {
     my ( $occurences_mem, $popularity, $sref, $wref ) = @_;
+    my $wlen = length $$wref;
+    if ( $wlen <= 2 ) {
+        return {
+            position => 0,
+            score => {
+                reused_digits => $wlen,
+                popularity => 0,
+            },
+        };
+    }
     my $best_score = {
         reused_digits => -1,
         popularity    => -1,
     };
     my $best_pos    = -1;
     my $occurrences = get_occurrences( $occurences_mem, $sref, $wref );
-    my $wlen        = length $$wref;
     for my $i (@$occurrences) {
         my $score = get_popularity( $popularity, $i, $wlen );
         if ( compare_score( $score, $best_score ) > 0 ) {
@@ -356,7 +367,7 @@ sub squeeze {
     my %occurrences_mem;
     my %split_points;
     my $n = length $$sref;
-    my @popularity = 0 x $n;
+    my @popularity = ( 0 ) x $n;
 
     my %wcount;
     for my $word (@$words) {
