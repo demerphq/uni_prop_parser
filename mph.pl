@@ -6,11 +6,18 @@ use Carp;
 use Text::Wrap;
 use List::Util qw / min shuffle /;
 use Data::Dumper; $Data::Dumper::Sortkeys = 1;
+use warnings 'FATAL'=>'all';
 
-my $INF   = 1e9;
-my $DEBUG= $ENV{DEBUG} || 0;
-my $RSHIFT= 8;
-my $FNV_CONST= 16777619;
+
+sub new {
+    my ($class,%opts)= @_;
+    $opts{INF}||=1e9;
+    $opts{DEBUG}||=0;
+    $opts{RSHIFT}||=8;
+    $opts{FNV_CONST}||=16777619;
+
+    return bless \%opts,$class;
+}
 
 sub _index {
     my ($buf,$string)= @_;
@@ -22,20 +29,20 @@ sub _index {
     return index $buf, $string
 }
 
-
 sub _fnv {
-    my ($key, $seed)= @_;
-
+    my ($self, $key, $seed)= @_;
     my $hash = 0+$seed;
     foreach my $char (split //, $key) {
         $hash = $hash ^ ord($char);
-        $hash = ($hash * $FNV_CONST) & 0xFFFFFFFF;
+        $hash = ($hash * $self->{FNV_CONST}) & 0xFFFFFFFF;
     }
     return $hash;
 }
 
 sub build_perfect_hash {
-    my ($hash, $split_pos)= @_;
+    my ($self, $hash, $split_pos)= @_;
+
+    carp "confess wtf!" unless $self->{RSHIFT};
 
     my $n= 0+keys %$hash;
     my $max_h= 0xFFFFFFFF;
@@ -54,13 +61,13 @@ sub build_perfect_hash {
         $length_all_keys= 0;
         foreach my $key (sort keys %$hash) {
             $length_all_keys += length $key;
-            my $h= _fnv($key,$seed1);
+            my $h= $self->_fnv($key,$seed1);
             next SEED1 if $h >= $max_h; # check if this hash would bias, and if so find a new seed
             next SEED1 if exists $hash_to_key{$h};
-            next SEED1 if $high{$h >> $RSHIFT}++;
+            next SEED1 if $high{$h >> $self->{RSHIFT}}++;
+            push @{$key_buckets{$h % $n}}, $key;
             $hash_to_key{$h}= $key;
             $key_to_hash{$key}= $h;
-            push @{$key_buckets{$h % $n}}, $key;
         }
         $hash_to_key= \%hash_to_key;
         $key_to_hash= \%key_to_hash;
@@ -79,7 +86,8 @@ sub build_perfect_hash {
         for ($seed2=1;1;$seed2++) {
             goto SEED1 if $seed2 > 0xFFFF;
             my @idx= map {
-                ( ( ( $key_to_hash->{$_} >> $RSHIFT ) ^ $seed2 ) & 0xFFFFFFFF ) % $n 
+                die "wtf '$_'" if !defined $key_to_hash->{$_};
+                ( ( ( $key_to_hash->{$_} >> $self->{RSHIFT} ) ^ $seed2 ) & 0xFFFFFFFF ) % $n 
             } @$keys;
             my %seen;
             next SEED2 if grep { $second_level[$_] || $seen{$_}++ } @idx;
@@ -106,164 +114,8 @@ sub build_perfect_hash {
     return $seed1, \@second_level, $length_all_keys;
 }
 
-sub _trie_r {
-    my ($node, $counts, $path, $score)= @_;
-    #push @$counts,[ $path, $node->{''} ] if $node->{''} and $node->{''}>1;
-    push @$counts,[ $path, $score ] if $score and $score>1;
-    foreach my $char (sort keys %$node) {
-        next unless length $char;
-        _trie_r($node->{$char},$counts,$path.$char, ($score||0)+($node->{''}||0));
-    }
-}
-
-sub _trie {
-    my ($hash) =@_;
-    my %trie;
-    foreach my $key (keys %$hash) {
-        my $node= \%trie;
-        foreach my $char (split //, $key) {
-            $node= ($node->{$char} ||= {});
-            $node->{''}++;
-        }
-    }
-    my @counts;
-    _trie_r(\%trie,\@counts,"");
-    @counts=sort {
-        ($b->[1]*length($b->[0])) <=> ($a->[1]*length($a->[0])) ||
-        ($b->[1]) <=> ($a->[1]) ||
-        length($b->[0]) <=> length($a->[0]) ||
-        $a->[0] cmp $b->[0]
-    } @counts;
-    my $blob= "";
-    @counts= grep {
-        my $idx= index($blob,$_->[0]);
-        if ($idx<0) {
-            $blob .= $_->[0]. "\0";
-        } else {
-            ();
-        }
-    } @counts;
-    return $blob;
-}
-
-sub build_split_words_greedy {
-    my ($hash, $preprocess, $blob, $old_res)= @_;
-    $|++;
-
-    my %appended;
-    $blob //= "";
-    if ($preprocess) {
-        my %pre;
-        my %suf;
-        foreach my $key (sort {length($b) <=> length($a) || $a cmp $b } keys %$hash) {
-            next if index($blob,$key)>=0;
-            if ($key=~/^([^=]+=)([^=]+)\z/ || $key=~/^(i[sn])(\w+)\z/) {
-                my ($prefix,$suffix)= ($1, $2);
-                if (!$pre{$prefix}++ and !$suf{$suffix}++ ) {
-                    $blob .= $key."\0";
-                } elsif ($pre{$prefix}) {
-                    $blob .= $suffix."\0" if _index($blob,$suffix) < 0 and !$suf{$suffix}++;
-                }
-            } else {
-                $blob .= $key . "\0" if _index($blob,$key) < 0;
-            }
-        }
-        printf "Using preprocessing, initial blob size %d\n", length($blob) if $DEBUG;
-    } else {
-        printf "No preprocessing, initial blob size %d\n", length($blob) if $DEBUG;
-    }
-    my %res;
-    my $count;
-
-    REDO:
-    %res= ();
-    $count= 0;
-
-    KEY:
-    foreach my $key (
-        sort {
-            (length($b) <=> length($a)) ||
-            ($b cmp $a)
-        }
-        keys %$hash
-    ) {
-        if (_index($blob,$key) >= 0 ) {
-            my $idx= length($key);
-            if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
-                print "changing: $key => $old_res->{$key} : $idx\n";
-            }
-            $res{$key}= $idx;
-            $appended{$key}++;
-        }
-        next if exists $res{$key};
-        my $best= length($key);
-        my $append= $key;
-        my $best_prefix;
-        my $best_suffix;
-        my $min= 0;
-        foreach my $idx (reverse 0 .. length($key)) {
-            my $prefix= substr($key,0,$idx);
-            my $suffix= substr($key,$idx);
-            next if (length($prefix) and length($prefix)<$min) or (length($suffix) and length($suffix)<$min);
-            my $i1= _index($blob,$prefix)>=0;
-            my $i2= _index($blob,$suffix)>=0;
-            if ($i1 and $i2) {
-                if ($DEBUG and $old_res and $old_res->{$key} != $idx) {
-                    print "changing: $key => $old_res->{$key} : $idx\n";
-                }
-                $res{$key}= $idx;
-                $appended{$prefix}++;
-                $appended{$suffix}++;
-                next KEY;
-            } elsif ($i1) {
-                if (length $suffix <= length $append) {
-                    $best= $idx;
-                    $append= $suffix;
-                    $best_prefix= $prefix;
-                    $best_suffix= $suffix;
-                }
-            } elsif ($i2) {
-                if (length $prefix <= length $append) {
-                    $best= $idx;
-                    $append= $prefix;
-                    $best_prefix= $prefix;
-                    $best_suffix= $suffix;
-                }
-            }
-        }
-        if ($DEBUG and $old_res and $old_res->{$key} != $best) {
-            print "changing: $key => $old_res->{$key} : $best\n";
-        }
-        $res{$key}= $best;
-        $blob .= $append;
-
-        print "$key  $best_prefix|$best_suffix => $best => '$append'\n"
-        #."$blob\n\n"
-              if $DEBUG;
-        $appended{$best_prefix}++;
-        $appended{$best_suffix}++;
-    }
-    my $b2 = "";
-    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %appended) {
-        $b2 .= $key unless _index($b2,$key)>=0;
-    }
-    if (length($b2)<length($blob) or (length($b2)==length($blob) && $b2 ne $blob)) {
-        printf "Length old blob: %d length new blob: %d, recomputing using new blob\n", length($blob),length($b2)
-            if $DEBUG;
-        $blob= $b2;
-        %appended=();
-        goto REDO;
-    } else {
-        printf "Length old blob: %d length new blob: %d, keeping old blob\n", length($blob),length($b2)
-            if $DEBUG;
-    }
-    die sprintf "not same size? %d != %d", 0+keys %res, 0+keys %$hash unless keys %res == keys %$hash;
-    return ($blob,\%res);
-}
-
-
 sub get_occurrences {
-    my ( $occurrences_mem, $sref, $wref ) = @_;
+    my ( $self, $occurrences_mem, $sref, $wref ) = @_;
     confess("not a hash") unless ref $occurrences_mem eq "HASH";
     return $occurrences_mem->{$$wref} if defined $occurrences_mem->{$$wref};
 
@@ -282,7 +134,7 @@ sub get_occurrences {
 }
 
 sub change_popularity {
-    my ( $popularity, $i, $len, $diff ) = @_;
+    my ( $self, $popularity, $i, $len, $diff ) = @_;
     return if $len <= 2;
     for ( $i .. $i + $len - 1 ) {
         $popularity->[$_] += $diff;
@@ -290,14 +142,14 @@ sub change_popularity {
 }
 
 sub get_popularity {
-    my ( $popularity, $i, $len ) = @_;
+    my ( $self, $popularity, $i, $len ) = @_;
     my $res = {
         reused_digits => 0,
         popularity    => 0,
     };
     my $min_pop = undef;
     for ( $i .. $i + $len - 1 ) {
-        if ( $popularity->[$_] > $INF - 1 ) {
+        if ( $popularity->[$_] > $self->{INF} - 1 ) {
             $res->{reused_digits}++;
         }
         else {
@@ -312,7 +164,7 @@ sub get_popularity {
 }
 
 sub merge_score {
-    my ( $s1, $s2 ) = @_;
+    my ( $self, $s1, $s2 ) = @_;
     return {
         reused_digits => $s1->{reused_digits} + $s2->{reused_digits},
         popularity    => min( $s1->{popularity}, $s2->{popularity} ),
@@ -320,10 +172,10 @@ sub merge_score {
 }
 
 sub change_all_popularities {
-    my ( $occurences_mem, $popularity, $sref, $wref, $diff ) = @_;
+    my ( $self, $occurences_mem, $popularity, $sref, $wref, $diff ) = @_;
     my $wlen = length $$wref;
     return if $wlen <= 2;
-    my $occurrences = get_occurrences( $occurences_mem, $sref, $wref );
+    my $occurrences = $self->get_occurrences( $occurences_mem, $sref, $wref );
     for my $i (@$occurrences) {
         for ( $i .. $i + $wlen - 1 ) {
             $popularity->[$_] += $diff;
@@ -332,7 +184,7 @@ sub change_all_popularities {
 }
 
 sub compare_score {
-    my ( $s1, $s2 ) = @_;
+    my ( $self, $s1, $s2 ) = @_;
     if ( $s1->{reused_digits} != $s2->{reused_digits} ) {
         return $s1->{reused_digits} <=> $s2->{reused_digits};
     }
@@ -340,7 +192,7 @@ sub compare_score {
 }
 
 sub get_most_popular_position {
-    my ( $occurences_mem, $popularity, $sref, $wref ) = @_;
+    my ( $self, $occurences_mem, $popularity, $sref, $wref ) = @_;
     my $wlen = length $$wref;
     if ( $wlen <= 2 ) {
         return {
@@ -356,10 +208,10 @@ sub get_most_popular_position {
         popularity    => -1,
     };
     my $best_pos    = -1;
-    my $occurrences = get_occurrences( $occurences_mem, $sref, $wref );
+    my $occurrences = $self->get_occurrences( $occurences_mem, $sref, $wref );
     for my $i (@$occurrences) {
-        my $score = get_popularity( $popularity, $i, $wlen );
-        if ( compare_score( $score, $best_score ) > 0 ) {
+        my $score = $self->get_popularity( $popularity, $i, $wlen );
+        if ( $self->compare_score( $score, $best_score ) > 0 ) {
             $best_score = $score;
             $best_pos   = $i;
             if ( $best_score->{reused_digits} == $wlen ) {
@@ -374,8 +226,8 @@ sub get_most_popular_position {
 }
 
 sub squeeze {
-    my ($words, $splits, $sref) = @_;
-    say("Squeezing...") if $DEBUG;
+    my ($self,$words, $splits, $sref) = @_;
+    say("Squeezing...") if $self->{DEBUG};
     my %occurrences_mem;
     my %split_points;
     my $n = length $$sref;
@@ -392,7 +244,7 @@ sub squeeze {
 
     for my $w ( sort keys %wcount ) {
         my $cnt = $wcount{$w};
-        change_all_popularities( \%occurrences_mem, \@popularity, $sref, \$w, $cnt / length($w) );
+        $self->change_all_popularities( \%occurrences_mem, \@popularity, $sref, \$w, $cnt / length($w) );
     }
 
     WORD:
@@ -407,14 +259,14 @@ sub squeeze {
 
 
         {
-            my $cand = get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$word );
+            my $cand = $self->get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$word );
             if ( $cand->{position} != -1 ) {
                 my $cand_score = $cand->{score};
                 if ( $cand_score->{reused_digits} == length($word) ) {
                     $split_points{$word} = 0;
                     next WORD;
                 }
-                elsif ( compare_score( $cand_score, $best_score ) > 0 ) {
+                elsif ( $self->compare_score( $cand_score, $best_score ) > 0 ) {
                     $best_score = $cand_score;
                     $best_pos1  = $cand->{position};
                     $best_pos2  = -1;
@@ -424,17 +276,17 @@ sub squeeze {
         }
 
         for my $split ( @{ $splits->{$word} } ) {
-            my $cand2 = get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$split->{w2} );
+            my $cand2 = $self->get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$split->{w2} );
             if ( $cand2->{position} != -1 ) {
-                my $cand1 = get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$split->{w1} );
+                my $cand1 = $self->get_most_popular_position( \%occurrences_mem, \@popularity, $sref, \$split->{w1} );
                 if ( $cand1->{position} != -1 ) {
                     my $cand_score =
-                      merge_score( $cand1->{score}, $cand2->{score} );
+                      $self->merge_score( $cand1->{score}, $cand2->{score} );
                     if ( $cand_score->{reused_digits} == length($word) ) {
                         $split_points{$word} = $split->{split_point};
                         next WORD;
                     }
-                    if ( compare_score( $cand_score, $best_score ) > 0 ) {
+                    if ( $self->compare_score( $cand_score, $best_score ) > 0 ) {
                         $best_score = $cand_score;
                         $best_pos1  = $cand1->{position};
                         $best_pos2  = $cand2->{position};
@@ -446,12 +298,12 @@ sub squeeze {
 
         # apply high pop to used characters of the champion
         if ( defined $best_split ) {
-            change_popularity( \@popularity, $best_pos1, length( $best_split->{w1} ), $INF );
-            change_popularity( \@popularity, $best_pos2, length( $best_split->{w2} ), $INF );
+            $self->change_popularity( \@popularity, $best_pos1, length( $best_split->{w1} ), $self->{INF} );
+            $self->change_popularity( \@popularity, $best_pos2, length( $best_split->{w2} ), $self->{INF} );
             $split_points{$word} = $best_split->{split_point};
         }
         else {
-            change_popularity( \@popularity, $best_pos1, length($word), $INF );
+            $self->change_popularity( \@popularity, $best_pos1, length($word), $self->{INF} );
             $split_points{$word} = 0;
         }
     }
@@ -459,11 +311,11 @@ sub squeeze {
     my $res = "";
     my @chars = split '', $$sref;
     for my $i ( 0 .. $n - 1 ) {
-        if ( $popularity[$i] > $INF - 1 ) {
+        if ( $popularity[$i] > $self->{INF} - 1 ) {
             $res .= $chars[$i];
         }
     }
-    say( $n. '->' . ( length $res ) ) if $DEBUG;
+    say( $n. '->' . ( length $res ) ) if $self->{DEBUG};
 
     # ilya's algorithm chooses to "split" full strings at 0, so that the prefix is empty
     # and the suffix contains the full key, mph wants it the other way around, as we do
@@ -474,7 +326,7 @@ sub squeeze {
 }
 
 sub get_words_combination {
-    my ($words,$splits)= @_;
+    my ($self,$words,$splits)= @_;
     my $res = "";
     WORD:
     for my $word (@$words) {
@@ -496,8 +348,7 @@ sub get_words_combination {
 }
 
 sub build_split_words_ilya {
-    my ($h,$s) = @_;
-    #srand(22);
+    my ($self,$h,$s) = @_;
 
     my @words= sort keys %$h;
     my %splits;
@@ -518,14 +369,14 @@ sub build_split_words_ilya {
     }
 
     @words = sort { length($a) <=> length($b) || $a cmp $b } @words;
-    $s //= get_words_combination(\@words,\%splits);
+    $s //= $self->get_words_combination(\@words,\%splits);
 
-    say($s) if $DEBUG;
-    say( length $s ) if $DEBUG;
+    say($s) if $self->{DEBUG};
+    say( length $s ) if $self->{DEBUG};
 
      while (1) {
         @words = reverse @words;
-        my ($new_s, $new_split_points)= squeeze( \@words, \%splits, \$s );
+        my ($new_s, $new_split_points)= $self->squeeze( \@words, \%splits, \$s );
         if (!$split_points || length($new_s) < length($s)) {
             $s= $new_s;
             $split_points= $new_split_points;
@@ -535,32 +386,33 @@ sub build_split_words_ilya {
     }
 
     my $same= 0;
-    my $max_same= $ENV{MAX_SAME} || 5;
+    my $max_same= $self->{MAX_SAME} || 5;
     my $counter= 0;
-    while ($ENV{RANDOMIZE} && $same < $max_same) {
-        if (++$counter % 2) {
+    while ($self->{RANDOMIZE} && $same < $max_same) {
+        if ($counter % 2) {
             @words = shuffle @words;
         } else {
             @words = reverse @words;
         }
-        my ($new_s,$new_split_points) = squeeze(\@words, \%splits, \$s);
+        my ($new_s,$new_split_points) = $self->squeeze(\@words, \%splits, \$s);
         if (length($s) > length($new_s)) {
             $s = $new_s;
             $split_points= $new_split_points;
             $same= 0;
         } elsif (length($s) <= length($new_s)) {
+            $counter++;
             $same++;
         }
     }
 
-    say $s if $DEBUG;
-    say( "Result: " . length($s) ) if $DEBUG;
+    say $s if $self->{DEBUG};
+    say( "Result: " . length($s) ) if $self->{DEBUG};
 
     return $s, $split_points;
 }
 
 sub blob_as_code {
-    my ($blob,$blob_name)= @_;
+    my ($self,$blob,$blob_name)= @_;
 
     $blob_name ||= "mph_blob";
 
@@ -576,7 +428,7 @@ sub blob_as_code {
 }
 
 sub print_includes {
-    my $ofh= shift;
+    my ($self,$ofh)= @_;
     print $ofh "#include <stdio.h>\n";
     print $ofh "#include <string.h>\n";
     print $ofh "#include <stdint.h>\n";
@@ -584,7 +436,7 @@ sub print_includes {
 }
 
 sub print_defines {
-    my ($ofh,$defines)= @_;
+    my ($self,$ofh,$defines)= @_;
 
     my $key_len;
     foreach my $def (keys %$defines) {
@@ -599,7 +451,7 @@ sub print_defines {
 
 
 sub build_array_of_struct {
-    my ($second_level,$blob)= @_;
+    my ($self,$second_level,$blob)= @_;
 
     my %defines;
     my %tests;
@@ -627,7 +479,7 @@ sub build_array_of_struct {
 }
 
 sub print_algo {
-    my ($ofh, $second_level, $seed1, $length_all_keys, $smart_blob, $rows,
+    my ($self, $ofh, $second_level, $seed1, $length_all_keys, $smart_blob, $rows,
         $blob_name, $struct_name, $table_name, $match_name, $prefix) = @_;
 
     $blob_name ||= "mph_blob";
@@ -646,7 +498,7 @@ sub print_algo {
     my $data_size= 0+@$second_level * 8 + length $smart_blob;
 
     print $ofh "/*\n";
-    printf $ofh "srand: %d\n", $ENV{SRAND};
+    printf $ofh "srand: %d\n", $self->{SRAND};
     printf $ofh "rows: %s\n", $n;
     printf $ofh "seed: %s\n", $seed1;
     printf $ofh "full length of keys: %d\n", $length_all_keys;
@@ -655,7 +507,7 @@ sub print_algo {
     printf $ofh "data size: %d (%%%.2f)\n", $data_size, ($data_size / $length_all_keys) * 100;
     print $ofh "*/\n\n";
 
-    print $ofh blob_as_code($smart_blob, $blob_name);
+    print $ofh $self->blob_as_code($smart_blob, $blob_name);
     print $ofh <<"EOF_CODE";
 
 struct $struct_name {
@@ -669,10 +521,10 @@ struct $struct_name {
 
 EOF_CODE
 
-    print $ofh "#define ${prefix}_RSHIFT $RSHIFT\n";
+    print $ofh "#define ${prefix}_RSHIFT $self->{RSHIFT}\n";
     print $ofh "#define ${prefix}_BUCKETS $n\n\n";
     printf $ofh "const uint32_t ${prefix}_SEED1 = 0x%08x;\n", $seed1;
-    printf $ofh "const uint32_t ${prefix}_FNV_CONST = 0x%08x;\n\n", $FNV_CONST;
+    printf $ofh "const uint32_t ${prefix}_FNV_CONST = 0x%08x;\n\n", $self->{FNV_CONST};
 
     print $ofh "\n";
     print $ofh "const struct $struct_name $table_name\[${prefix}_BUCKETS] = {\n", join(",\n", @$rows)."\n};\n\n";
@@ -711,7 +563,7 @@ EOF_CODE
 }
 
 sub print_main {
-    my ($ofh,$h_file,$match_name,$prefix)=@_;
+    my ($self,$ofh,$h_file,$match_name,$prefix)=@_;
     print $ofh <<"EOF_CODE";
 #define ${prefix}_VALt int16_t
 #include "$h_file"
@@ -730,7 +582,7 @@ EOF_CODE
 
 # output the test Perl code.
 sub print_tests {
-    my ($file, $tests_hash)= @_;
+    my ($self,$file, $tests_hash)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file' for writing: $!";
     my $num_tests= 2 + keys %$tests_hash;
@@ -754,19 +606,19 @@ sub print_tests {
 }
 
 sub print_test_binary {
-    my ($file,$h_file, $second_level, $seed1, $length_all_keys,
+    my ($self,$file,$h_file, $second_level, $seed1, $length_all_keys,
         $smart_blob, $rows, $defines, $match_name, $prefix)= @_;
     open my $ofh, ">", $file
         or die "Failed to open '$file': $!";
-    print_includes($ofh);
-    print_defines($ofh, $defines);
-    print_main($ofh,$h_file,$match_name,$prefix);
+    $self->print_includes($ofh);
+    $self->print_defines($ofh, $defines);
+    $self->print_main($ofh,$h_file,$match_name,$prefix);
     close $ofh;
 }
 
 # make sure we split such that we test the longest string first.
 sub _fixup_splitpoints {
-    my ($blob,$split_points)= @_;
+    my ($self,$blob,$split_points)= @_;
     KEY:
     foreach my $key (keys %$split_points) {
         if (_index($blob,$key)>=0) {
@@ -784,33 +636,33 @@ sub _fixup_splitpoints {
 }
 
 sub make_mph_from_hash {
-    my $hash= shift;
+    my ($self,$hash)= @_;
 
     # we do this twice because often we can find longer prefixes on the second pass.
     my @keys= sort {length($b) <=> length($a) || $a cmp $b } keys %$hash;
 
     my @tuples;
-    push @tuples, ["greedy",build_split_words_greedy($hash,0)];
-    push @tuples, ["greedy-smart",build_split_words_greedy($hash,1)];
-    push @tuples, ["ilya",build_split_words_ilya($hash)];
+    push @tuples, ["ilya",$self->build_split_words_ilya($hash)];
 
     @tuples= sort {length($a->[1])<=>length($b->[1])} @tuples;
-    if ($DEBUG) {
+    if ($self->{DEBUG}) {
         printf "strategy: %s length %d\n", $_->[0], length($_->[1])
             for @tuples;
     }
 
     my ($strategy, $blob, $split_points)= @{$tuples[0]};
 
-    _fixup_splitpoints($blob,$split_points);
+    $self->_fixup_splitpoints($blob,$split_points);
 
-    my ($seed1, $second_level, $length_all_keys)= build_perfect_hash($hash, $split_points);
-    my ($rows, $defines, $tests)= build_array_of_struct($second_level, $blob);
+    my ($seed1, $second_level, $length_all_keys)= $self->build_perfect_hash($hash, $split_points);
+    my ($rows, $defines, $tests)= $self->build_array_of_struct($second_level, $blob);
     return ($second_level, $seed1, $length_all_keys, $blob, $rows, $defines, $tests);
 }
 
 sub make_files {
-    my ($hash,$base_name)= @_;
+    my ($self,$hash)= @_;
+
+    my $base_name= $self->{BASE_NAME};
 
     my $h_name= $base_name . "_algo.h";
     my $c_name= $base_name . "_test.c";
@@ -822,22 +674,28 @@ sub make_files {
     my $prefix= uc($base_name);
 
     my ($second_level, $seed1, $length_all_keys,
-        $smart_blob, $rows, $defines, $tests)= make_mph_from_hash( $hash );
-    print_algo( $h_name,
+        $smart_blob, $rows, $defines, $tests)= $self->make_mph_from_hash( $hash );
+    $self->print_algo( $h_name,
         $second_level, $seed1, $length_all_keys, $smart_blob, $rows,
         $blob_name, $struct_name, $table_name, $match_name, $prefix );
-    print_test_binary( $c_name, $h_name, $second_level, $seed1, $length_all_keys,
+    $self->print_test_binary( $c_name, $h_name, $second_level, $seed1, $length_all_keys,
         $smart_blob, $rows, $defines,
         $match_name, $prefix );
-    print_tests( $p_name, $tests );
+    $self->print_tests( $p_name, $tests );
+}
+
+sub make_perfect_hash {
+    my ($self,$hash)= @_;
+    if ($self->{SRAND}) {
+        srand($self->{SRAND});
+    } else {
+        $self->{SRAND}= srand();
+    }
+    $self->make_files($hash);
+
 }
 
 unless (caller) {
-    if ($ENV{SRAND}) {
-        srand($ENV{SRAND});
-    } else {
-        $ENV{SRAND}= srand();
-    }
     my %hash;
     {
         no warnings;
@@ -864,16 +722,10 @@ unless (caller) {
         $hash{$key} = $munged;
     }
 
-    if (@ARGV) {
-        foreach my $key (keys %hash) {
-            print $key,"\n";
-        }
-        exit;
-    }
-
     my $name= shift @ARGV;
     $name ||= "mph";
-    make_files(\%hash,$name);
+    local $ENV{BASE_NAME}= $name;
+    __PACKAGE__->new(%ENV)->make_perfect_hash(\%hash);
 }
 
 1;
