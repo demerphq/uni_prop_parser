@@ -267,12 +267,14 @@ sub build_split_words_new {
     my $orig_size= length($buf);
     my $length_buf= $orig_size;
     my $is_longer= 0;
+    my $iters= 0;
     my $new_buf= "";
     my $sentinal;
     my $best_buf;
     my $best_split_point={};
     COMPRESS:
     while ($new_buf ne $buf) {
+        $iters++;
         if (length $new_buf) {
             $buf= $new_buf;
         }
@@ -421,21 +423,24 @@ sub build_split_words_new {
         $new_buf= _smart_join(\@sorted);
         my $append= 1;
         if (!$best_buf or length($new_buf) < length($best_buf) ) {
+            $is_longer=0;
+            printf "squeezed %d bytes, length changed from %d to %d - %6.2f%% (%d/%d)\n",
+                abs(length($new_buf)-$length_buf),
+                $length_buf, length($new_buf), length($new_buf)/$length_buf*100,
+                $is_longer, $iters;
             $best_buf= $new_buf;
             $best_split_point= $split_point;
-            printf "squeezed %d bytes, length changed from %d to %d - %6.2f%%\n", 
-                abs(length($new_buf)-$length_buf),
-                $length_buf, length($new_buf), length($new_buf)/$length_buf*100; 
-            $is_longer=0;
-            my $file= sprintf "best.%d.%d.buf", $$,length($best_buf);
+            my $file= sprintf "best.%d.%d.buf", $$,length($new_buf);
             open my $fh, ">", $file or die "error writing '$file': $!";
             print $fh $best_buf;
             close $fh;
         } else {
-            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%% (%d)\n",
+            $is_longer++;
+            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%% (%d/%d)\n",
                 length($new_buf)-$length_buf,
-                $length_buf, length($new_buf), length($new_buf)/$length_buf*100, $is_longer+1;
-            last if ++$is_longer > 1000;
+                $length_buf, length($new_buf), length($new_buf)/$length_buf*100,
+                $is_longer, $iters;
+            last if $is_longer > 1000;
             $new_buf= $best_buf;
             $append= 1;
         }
