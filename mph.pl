@@ -206,6 +206,7 @@ sub build_split_words_new {
     };
     my $alt_buf="";
     $sortkeys->();
+    my %skipped_keys;
     if (0) {
         $buf= join "!", @keys;
     } elsif (!-e "covers.buf") {
@@ -215,7 +216,11 @@ sub build_split_words_new {
             my ($key)= shift @keys; 
             delete $copy{$key};
             next unless length($key) > 4;
-            next if index($buf,$key) >= 0;
+            $skipped_keys{$key} = 0;
+            if (index($buf,$key) >= 0) {
+                $skipped_keys{$key} = 1;
+                next;
+            }
             my $best_append;
             foreach my $part (@{$parts{$key}}) {
                 my ($l,$r)= @$part;
@@ -432,6 +437,7 @@ sub build_split_words_new {
                 $length_buf, length($new_buf), length($new_buf)/$length_buf*100, $is_longer+1;
             last if ++$is_longer > 1000;
             $new_buf= $best_buf;
+            $append= 1;
         }
         $length_buf= length($new_buf);
         $new_buf .= "--";
@@ -439,7 +445,7 @@ sub build_split_words_new {
             @included= shuffle @included;
             my $prepend_word= $included[0];
             $new_buf = $prepend_word . $new_buf;
-            print "prepending '$prepend_word'\n";
+            printf "prepending '%s' %s\n", $prepend_word, $skipped_keys{$prepend_word}//"";
         }
     }
     my $key_len=0;
