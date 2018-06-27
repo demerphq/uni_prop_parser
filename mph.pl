@@ -95,6 +95,357 @@ sub build_perfect_hash {
     return $seed1, \@second_level, $length_all_keys;
 }
 
+sub _smart_join {
+    my ($words)= @_;
+    my @words= @$words;
+    my $changed= 1;
+    while ($changed) {
+        $changed= 0;
+        my %suffix;
+        foreach my $word (@words) {
+            $suffix{substr($word,-$_)}{$word}++ for 1..length($word)-1;
+        }
+        my %by_best;
+        my %all;
+        foreach my $word (@words) {
+            my $best={};
+            my $best_prefix= "";
+            for ( 1 .. length($word) -1 ) {
+                my $prefix= substr($word,0,$_);
+                if (keys %{$suffix{$prefix}} > keys %$best) {
+                    $best_prefix= $prefix;
+                    $best= $suffix{$prefix};
+                }
+            }
+            $by_best{$best_prefix}{$word}=$best;
+            $all{$word}++;
+        }
+        foreach my $prefix (sort { length($b) <=> length($a) || $a cmp $b } keys %by_best) {
+            WORD:
+            foreach my $word (sort { length($b) <=> length($a) || $a cmp $b } keys %{$by_best{$prefix}}) {
+                next unless $all{$word};
+                foreach my $other (sort { length($b) <=> length($a) || $a cmp $b } keys %{$by_best{$prefix}{$word}}) {
+                    next if !$all{$other} or $word eq $other;
+                    my $merge= $other . substr($word,length($prefix));
+                    delete $by_best{$prefix}{$word}{$other};
+                    delete $all{$other};
+                    delete $all{$word};
+                    $all{$merge}++;
+                    $changed++;
+                    next WORD;
+                }
+
+            }
+        }
+        @words= keys %all;
+    }
+    my $ret= join "", sort { length($a) <=> length($b) || $a cmp $b } @words;
+    #my $orig= join "", sort { length($a) <=> length($b) || $a cmp $b } @$words;
+    #printf "join_squeeze removed %d chars\n", length($orig)-length($ret) if length($orig)-length($ret)>0;
+    return $ret;
+}
+sub build_split_words_new {
+    my ($hash, $preprocess, $blob, $old_res)= @_;
+    $|++;
+    my %parts;
+    my %seen;
+    my @included;
+    foreach my $key (sort { length($b) <=> length($a) || $a cmp $b } keys %$hash) {
+        next if length($key)<=4;
+        push @included, $key;
+        $seen{$key}++;
+        for (my $len= length($key)-2; $len>=2; $len--) {
+            my ($l,$r)= unpack "A${len}A*", $key;
+            push @{$parts{$key}},[$l,$r];
+            $seen{$l}++ if length($r) == 2;
+            $seen{$r}++ if length($l) == 2;
+        }
+    }
+    my $covers;
+    my $rcovers;
+    use Sereal::Encoder qw(encode_sereal);
+    use Sereal::Decoder qw(decode_sereal);
+    my $covers_file= "covers.srl";
+    if (!-e $covers_file) {
+        my %covers;
+        my %rcovers;
+        my @seen= sort { length($b) <=> length($a) || $a cmp $b } keys %seen;
+        my @rseen= reverse @seen;
+        foreach my $key (@seen) {
+            foreach my $okey (@rseen) {
+                last if length $okey > length $key;
+                if (index($key,$okey)>=0) {
+                    $covers{$key}{$okey}++;
+                    $rcovers{$okey}{$key}++;
+                }
+            }
+            printf "%s covers %d\n",$key, 0+keys(%{$covers{$key}});
+        }
+        open my $fh, ">", $covers_file or die "$covers_file: $!";
+        print $fh encode_sereal({covers=>\%covers,rcovers=>\%rcovers});
+        close $fh;
+        $covers= \%covers;
+        $rcovers= \%rcovers;
+    } else {
+        open my $fh, "<", $covers_file or die "$covers_file: $!";
+        my $enc= do { local $/; <$fh> };
+        my $data= decode_sereal($enc);
+        $rcovers= $data->{rcovers};
+        $covers= $data->{covers};
+    }
+    my $buf="";
+    my %copy= %$hash;
+    my @keys;
+    my $sortkeys= sub {
+        @keys= sort { 
+            (keys(%{$covers->{$b}||{}})*(length($b))) <=> (keys(%{$covers->{$a}||{}})*(length($a))) || 
+            (keys(%{$covers->{$b}||{}})) <=> (keys(%{$covers->{$a}||{}})) || 
+            length($b) <=> length($a) || 
+            $a cmp $b
+        } keys %copy;
+    };
+    my $alt_buf="";
+    $sortkeys->();
+    if (0) {
+        $buf= join "!", @keys;
+    } elsif (!-e "covers.buf") {
+        print "-- computing initial buffer\n";
+        KEY:
+        while (@keys) {
+            my ($key)= shift @keys; 
+            delete $copy{$key};
+            next unless length($key) > 4;
+            next if index($buf,$key) >= 0;
+            my $best_append;
+            foreach my $part (@{$parts{$key}}) {
+                my ($l,$r)= @$part;
+                my $lidx= length($l)<=2 ? 0 : index($buf,$l);
+                my $ridx= length($r)<=2 ? 0 : index($buf,$r);
+                if ($lidx>=0 and $ridx>=0) {
+                    next KEY;
+                } elsif ($lidx>=0 or $ridx>=0) {
+                    my $append;
+                    if ($lidx>=0) {
+                        $append= $r;
+                    } else {
+                        $append= $l;
+                    }
+                    $best_append //= $append;
+                    $best_append = $append if length($best_append) > length($append);
+                }
+            }
+            printf "%s: %d | %s: %d\n", $key, 0+keys(%{$covers->{$key}||{}}), $best_append//"", 0+keys(%{$covers->{$best_append}||{}});
+            if ( 1 or 0+keys(%{$covers->{$key}||{}}) >= 3 ) {
+                $best_append= $key;
+            }
+            $buf .= "!".$best_append;
+
+            foreach my $sub_key (keys %{$covers->{$key}||{}}) {
+                foreach my $okey (keys %{$rcovers->{$sub_key}||{}}) {
+                    delete $covers->{$okey}{$sub_key};
+                }
+                delete $covers->{$sub_key};
+                delete $rcovers->{$sub_key};
+            }
+            delete $covers->{$key};
+            delete $rcovers->{$key};
+            $sortkeys->();
+        }
+        open my $fh, ">", "covers.buf" or die "covers.buf:$!";
+        print $fh $buf;
+        close $fh;
+    } else {
+        open my $fh, "<", "covers.buf" or die "covers.buf:$!";
+        $buf= do { local $/; <$fh> };
+        close $fh;
+    }
+    my $orig_size= length($buf);
+    my $length_buf= $orig_size;
+    my $is_longer= 0;
+    my $new_buf= "";
+    my $sentinal;
+    my $best_buf;
+    my $best_split_point={};
+    COMPRESS:
+    while ($new_buf ne $buf) {
+        if (length $new_buf) {
+            $buf= $new_buf;
+        }
+        $buf.="--" unless substr($buf,0,-2) eq "--";
+        $sentinal= index($buf,"--");
+        my @used= (0) x length $buf;
+        foreach my $key (
+            sort { length($b) <=> length($a) || $a cmp $b } keys %$hash
+        ) {
+            next unless length($key) > 4;
+            my ($best_l,$best_r,$best_lidx,$best_ridx,$best_eidx);
+            my %left;
+            my %right;
+            my %add;
+            foreach my $part (
+                #[$key,""],
+                @{$parts{$key}}
+            ) {
+                my ($l,$r)= @$part;
+                my $lidx= length($l)<=2 ? $sentinal : index($buf,$l);
+                my $ridx= length($r)<=2 ? $sentinal : index($buf,$r);
+                my $eidx= $ridx + length($r);
+                if ($lidx>=0 and $ridx>=0 
+                    and (!defined($best_l) or $best_lidx != $lidx or $best_ridx != $ridx)
+                ) {
+                    $best_l= $l;
+                    $best_r= $r;
+                    $best_lidx= $lidx;
+                    $best_ridx= $ridx;
+                    $best_eidx= $eidx;
+                    #print "$key | $l | $r | $lidx | $eidx\n";
+                    $left{$lidx}=$l if length($left{$lidx}||"") < length($l);
+                    $right{$eidx}=$r if length($right{$eidx}||"") < length($r);
+                }
+            }
+            die "Failed to match $key" if !keys %left or !keys %right;
+            for my $eidx (keys %right) {
+                my $str= $right{$eidx};
+                my $lidx= $eidx - length($str);
+                $add{$_}++ for $lidx .. ($lidx+length($str)-1);
+            }
+            foreach my $lidx (keys %left) {
+                my $str= $left{$lidx};
+                $add{$_}++ for $lidx .. ($lidx+length($str)-1);
+            }
+            for (keys %add) {
+                $used[$_]++;
+            }
+        }
+        my @final_used=(0) x @used;
+        my %used_parts;
+        my $split_point={};
+        foreach my $key ( 
+            sort { length($b) <=> length($a) || $a cmp $b } keys %$hash
+        ) {
+            if (length($key) <= 4) {
+                $split_point->{$key}=int(length($key)+0.5);
+                next;
+            }
+            my ($best_l,$best_r,$best_lidx,$best_ridx,$best_eidx,$best_score,$best_min);
+            foreach my $part (
+                #[$key,""],
+                @{$parts{$key}}) {
+                my ($l,$r)= @$part;
+                my $lidx= length($l)<=2 ? $sentinal : index($buf,$l);
+                my $ridx= length($r)<=2 ? $sentinal : index($buf,$r);
+                next if $lidx<0 or $ridx<0;
+                my $score= 0;
+                my $min;
+                my $len;
+                if ($lidx < $sentinal) {
+                    $len += length($l);
+                    $min //= $used[$lidx];
+                    foreach my $idx ($lidx .. $lidx+length($l)-1) {
+                        $score += $used[$idx];
+                        $min= $used[$idx] if $score < $used[$idx];
+                    }
+                }
+                if ($ridx<$sentinal) {
+                    $len += length($r);
+                    $min //= $used[$ridx];
+                    foreach my $idx ($ridx .. $ridx+length($r)-1) {
+                        $score += $used[$idx];
+                        $min= $used[$idx] if $used[$idx] < $min;
+                    }
+                }
+                $score /= $len;
+                my $scorep= sprintf "%.4f", $score;
+                my $eidx= $ridx + length($r);
+                if (
+                    $lidx>=0 and $ridx>=0 and 
+                    ( !defined($best_score) or ($score > $best_score) )
+                ) {
+                    $best_l= $l;
+                    $best_r= $r;
+                    $best_lidx= $lidx;
+                    $best_ridx= $ridx;
+                    $best_eidx= $eidx;
+                    $best_score= $score;
+                    $best_min= $min;
+                    #print "$key = $l | $r | $lidx | $eidx | $scorep\n";
+                }
+            }
+            $split_point->{$key}=length($best_l);
+
+            foreach my $idx ($best_lidx .. $best_lidx+length($best_l)-1) {
+                $final_used[$idx]++;
+            }
+            foreach my $idx ($best_ridx .. $best_ridx+length($best_r)-1) {
+                $final_used[$idx]++;
+            }
+            $used_parts{$best_l}++ if length $best_l>2;
+            $used_parts{$best_r}++ if length $best_r>2;
+        }
+        my @parts= ("");
+        my @score= (0);
+        $new_buf= "";
+        foreach my $i (0..$#used) {
+            if ($final_used[$i]) {
+                $parts[-1] .= substr($buf,$i,1);
+                $score[-1] += $final_used[$i];
+            } elsif (length $parts[-1]) {
+                push @parts, "";
+                push @score, 0;
+            }
+        }
+        unless (length $parts[-1]) {
+            pop @parts;
+            pop @score;
+        }
+        $parts[-1]=~s/--\z//;
+        unless (length $parts[-1]) {
+            pop @parts;
+            pop @score;
+        }
+        my @idx= sort { 
+            length($parts[$a]) <=> length($parts[$b]) 
+            || $parts[$a] cmp $parts[$b] 
+        } 0 .. $#parts;
+        my @sorted= @parts[@idx];
+        foreach my $idx (@idx) {
+            my $part= $parts[$idx];
+            my $score= ($score[$idx]/=length($part));
+            #print "part $idx: $score: $part\n";
+        }
+        $new_buf= _smart_join(\@sorted);
+        my $append= 1;
+        if (!$best_buf or length($new_buf) < length($best_buf) ) {
+            $best_buf= $new_buf;
+            $best_split_point= $split_point;
+            printf "squeezed %d bytes, length changed from %d to %d - %6.2f%%\n", 
+                abs(length($new_buf)-$length_buf),
+                $length_buf, length($new_buf), length($new_buf)/$length_buf*100; 
+            $is_longer=0;
+        } else {
+            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%%\n", 
+                length($new_buf)-$length_buf,
+                $length_buf, length($new_buf), length($new_buf)/$length_buf*100;
+            last if ++$is_longer > 1000;
+            $new_buf= $best_buf;
+        }
+        $length_buf= length($new_buf);
+        $new_buf .= "--";
+        if ($append and @included) {
+            @included= shuffle @included;
+            my $prepend_word= $included[0];
+            $new_buf = $prepend_word . $new_buf;
+            print "prepending '$prepend_word'\n";
+        }
+    }
+    my $key_len=0;
+    $key_len+=length($_) for keys %$hash;
+
+    printf "squeezed unused length from %d to %d (%%%.2f/%d)\n", 
+        $key_len, length($best_buf), length($best_buf) / $key_len * 100, length($best_buf) - $key_len;
+    return $best_buf, $best_split_point;
+}
+
 sub build_split_words {
     my ($hash, $preprocess, $blob, $old_res)= @_;
     $|++;
@@ -735,9 +1086,8 @@ sub make_mph_from_hash {
     my @keys= sort {length($b) <=> length($a) || $a cmp $b } keys %$hash;
 
     my @tuples;
-    push @tuples, ["greedy",build_split_words($hash,0)];
-    push @tuples, ["greedy-smart",build_split_words($hash,1)];
-    push @tuples, ["ilya",build_split_words_ilya($hash)];
+    push @tuples, ["yves",build_split_words_new($hash)];
+    #push @tuples, ["ilya",build_split_words_ilya($hash)];
 
     @tuples= sort {length($a->[1])<=>length($b->[1])} @tuples;
     if ($DEBUG) {
