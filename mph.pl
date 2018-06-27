@@ -422,10 +422,14 @@ sub build_split_words_new {
                 abs(length($new_buf)-$length_buf),
                 $length_buf, length($new_buf), length($new_buf)/$length_buf*100; 
             $is_longer=0;
+            my $file= sprintf "best.%d.%d.buf", $$,length($best_buf);
+            open my $fh, ">", $file or die "error writing '$file': $!";
+            print $fh $best_buf;
+            close $fh;
         } else {
-            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%%\n", 
+            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%% (%d)\n",
                 length($new_buf)-$length_buf,
-                $length_buf, length($new_buf), length($new_buf)/$length_buf*100;
+                $length_buf, length($new_buf), length($new_buf)/$length_buf*100, $is_longer+1;
             last if ++$is_longer > 1000;
             $new_buf= $best_buf;
         }
