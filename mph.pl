@@ -132,6 +132,7 @@ sub _smart_join {
                     delete $all{$word};
                     $all{$merge}++;
                     $changed++;
+                    #print "merged: $other $word => $merge\n";
                     next WORD;
                 }
 
@@ -324,6 +325,7 @@ sub build_split_words_new {
                 $used[$_]++;
             }
         }
+        my @cross=(0) x @used;
         my @final_used=(0) x @used;
         my %used_parts;
         my $split_point={};
@@ -381,9 +383,11 @@ sub build_split_words_new {
             $split_point->{$key}=length($best_l);
 
             foreach my $idx ($best_lidx .. $best_lidx+length($best_l)-1) {
+                $cross[$idx]++ if $idx > $best_lidx;
                 $final_used[$idx]++;
             }
             foreach my $idx ($best_ridx .. $best_ridx+length($best_r)-1) {
+                $cross[$idx]++ if $idx > $best_ridx;
                 $final_used[$idx]++;
             }
             $used_parts{$best_l}++ if length $best_l>2;
@@ -394,6 +398,11 @@ sub build_split_words_new {
         $new_buf= "";
         foreach my $i (0..$#used) {
             if ($final_used[$i]) {
+                if (0 && !$cross[$i] && length($parts[-1])) {
+                    #warn "splitting at $i\n";
+                    push @parts, "";
+                    push @score, 0;
+                }
                 $parts[-1] .= substr($buf,$i,1);
                 $score[-1] += $final_used[$i];
             } elsif (length $parts[-1]) {
@@ -422,35 +431,34 @@ sub build_split_words_new {
         }
         $new_buf= _smart_join(\@sorted);
         my $append= 1;
-        if (!$best_buf or length($new_buf) < length($best_buf) ) {
+        my $new_buf_len= length($new_buf);
+        if (!$best_buf or $new_buf_len < length($best_buf) ) {
+            @included= shuffle @included;
             $is_longer=0;
-            printf "squeezed %d bytes, length changed from %d to %d - %6.2f%% (%d/%d)\n",
-                abs(length($new_buf)-$length_buf),
-                $length_buf, length($new_buf), length($new_buf)/$length_buf*100,
-                $is_longer, $iters;
             $best_buf= $new_buf;
             $best_split_point= $split_point;
-            my $file= sprintf "best.%d.%d.buf", $$,length($new_buf);
+            my $file= sprintf "best.%d.%d.buf", $$,$new_buf_len;
             open my $fh, ">", $file or die "error writing '$file': $!";
             print $fh $best_buf;
             close $fh;
         } else {
             $is_longer++;
-            printf "squeeze failed, added %d bytes, length changed from %d to %d - %6.2f%% (%d/%d)\n",
-                length($new_buf)-$length_buf,
-                $length_buf, length($new_buf), length($new_buf)/$length_buf*100,
-                $is_longer, $iters;
-            last if $is_longer > 1000;
             $new_buf= $best_buf;
             $append= 1;
         }
-        $length_buf= length($new_buf);
+        printf "delta: %+5d, length: %5d -> %5d - %6.2f%% [%4d/%4d] ",
+            $new_buf_len-$length_buf,
+            $length_buf, $new_buf_len, $new_buf_len/$length_buf*100,
+            $is_longer, $iters;
+
+        last if $is_longer > 1000;
+        $length_buf= length($new_buf); # new_buf might have changed!
         $new_buf .= "--";
         if ($append and @included) {
-            @included= shuffle @included;
-            my $prepend_word= $included[0];
+            my $prepend_word= $included[$iters % @included];
             $new_buf = $prepend_word . $new_buf;
-            printf "prepending '%s' %s\n", $prepend_word, $skipped_keys{$prepend_word}//"";
+            print "$prepend_word\n";
+            #printf "prepending '%s' %s\n", $prepend_word, $skipped_keys{$prepend_word}//"";
         }
     }
     my $key_len=0;
