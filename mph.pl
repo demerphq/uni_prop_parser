@@ -74,7 +74,7 @@ sub build_perfect_hash {
             next SEED2 if grep { $second_level[$_] || $seen{$_}++ } @idx;
             $first_level[$first_idx]= $seed2;
             @second_level[@idx]= map {
-                my $sp= $split_pos->{$_} // die "no split pos for '$_':$!";
+                my $sp= $split_pos->{$_} // die "no split pos for '$_'";
                 my ($prefix,$suffix)= unpack "A${sp}A*", $_;
 
                 +{
@@ -140,7 +140,8 @@ sub _smart_join {
         }
         @words= keys %all;
     }
-    my $ret= join "", sort { length($a) <=> length($b) || $a cmp $b } @words;
+    my $ret= join "", sort { length($a) <=> length($b) || $a cmp $b }
+                      @words;
     #my $orig= join "", sort { length($a) <=> length($b) || $a cmp $b } @$words;
     #printf "join_squeeze removed %d chars\n", length($orig)-length($ret) if length($orig)-length($ret)>0;
     return $ret;
@@ -276,7 +277,7 @@ sub _build_initial_buf {
 }
 
 sub _remove_unused_chars {
-    my ($buf,$hash,$key_parts)= @_;
+    my ($buf, $hash, $key_parts)= @_;
 
     my $sentinal= index($buf,"--");
     my @used= (0) x length $buf;
@@ -306,7 +307,7 @@ sub _remove_unused_chars {
                 $right{$eidx}=$r if length($right{$eidx}||"") < length($r);
             }
         }
-        die "Failed to match $key" if !keys %left or !keys %right;
+        die "Failed to match $key in $buf" if !keys %left or !keys %right;
         for my $eidx (keys %right) {
             my $str= $right{$eidx};
             my $lidx= $eidx - length($str);
@@ -320,13 +321,12 @@ sub _remove_unused_chars {
             $used[$_]++;
         }
     }
+    my @crossed=(0) x @used;
     my @final_used=(0) x @used;
-    my $split_point={};
     foreach my $key (
         sort { length($b) <=> length($a) || $a cmp $b } keys %$hash
     ) {
         if (length($key) <= 4) {
-            $split_point->{$key}=int(length($key)+0.5);
             next;
         }
         my ($best_l,$best_r,$best_lidx,$best_ridx,$best_eidx,$best_score,$best_min);
@@ -371,22 +371,34 @@ sub _remove_unused_chars {
                 #print "$key = $l | $r | $lidx | $eidx | $scorep\n";
             }
         }
-        $split_point->{$key}= length($best_l);
+        if (!defined $best_score) {
+            die "No best for '$key'";
+        }
 
         foreach my $idx ($best_lidx .. $best_lidx+length($best_l)-1) {
+            $crossed[$idx]++ if $idx>$best_lidx;
             $final_used[$idx]++;
         }
         foreach my $idx ($best_ridx .. $best_ridx+length($best_r)-1) {
+            $crossed[$idx]++ if $idx>$best_ridx;
             $final_used[$idx]++;
         }
     }
+    return _remove_unused_final($buf, \@final_used, \@crossed);
+}
+
+sub _remove_unused_final {
+    my ($buf, $final_used, $crossed)= @_;
     my @parts= ("");
     my @score= (0);
-    my $new_buf= "";
-    foreach my $i (0..$#used) {
-        if ($final_used[$i]) {
+    foreach my $i (0 .. $#$final_used) {
+        if ($final_used->[$i]) {
+            if (0 and !$crossed->[$i] and length $parts[-1]) {
+                push @parts, "";
+                push @score, 0;
+            }
             $parts[-1] .= substr($buf,$i,1);
-            $score[-1] += $final_used[$i];
+            $score[-1] += $final_used->[$i];
         } elsif (length $parts[-1]) {
             push @parts, "";
             push @score, 0;
@@ -401,75 +413,110 @@ sub _remove_unused_chars {
         pop @parts;
         pop @score;
     }
-    my @idx= sort {
-        length($parts[$a]) <=> length($parts[$b])
-        || $parts[$a] cmp $parts[$b]
-    } 0 .. $#parts;
-    my @sorted= @parts[@idx];
-    foreach my $idx (@idx) {
-        my $part= $parts[$idx];
-        my $score= ($score[$idx]/=length($part));
-        #print "part $idx: $score: $part\n";
-    }
-    return _smart_join(\@sorted);
+    my $new_buf= _smart_join(\@parts);
+    return $new_buf;
 }
 
+sub _write_best_buf {
+    my ($workdir, $best_buf)= @_;
+    my $file= sprintf "%s/best.%d", $workdir, length($best_buf);
+    return if -e $file;
+    open my $fh, ">", "$file.$$.tmp" or die "error writing '$file.$$.tmp': $!";
+    print $fh $best_buf;
+    close $fh;
+    rename "$file.$$.tmp", "$file.buf"
+        or die "Failed to rename '$file.$$.tmp' to '$file.buf': $!";
+}
+
+sub _find_best_buf {
+    my ($workdir)= @_;
+    my @files= glob "$workdir/best.*.buf";
+    (@files)= sort { $a->[1] <=> $b->[1] } map { /best\.(\d+)\./ ? [$_,$1] : () } @files;
+    my $best_file= $files[0][0];
+    open my $fh, "<", $best_file or die "failed to open '$best_file': $!";
+    my $buf= do {local $/; <$fh>};
+    return $buf
+}
+
+sub _compute_leftmost_longest {
+    my ($buf, $hash, $key_parts)= @_;
+    my %split_point;
+    my @bad;
+    my $key_length= 0;
+    KEY:
+    foreach my $key (keys %$hash) {
+        $key_length += length($key);
+        if (length($key) <= 4) {
+            if (index($buf,$key)>=0) {
+                $split_point{$key}=length($key);
+            } else {
+                $split_point{$key}= int((length($key)+0.5)/2);
+            }
+        } else {
+            foreach my $part (@{$key_parts->{$key}}) {
+                my ($l,$r)= @$part;
+                my $lidx= length($l)<=2 ? 0 : index($buf,$l);
+                my $ridx= length($r)<=2 ? 0 : index($buf,$r);
+                if ($lidx>=0 and $ridx>=0) {
+                    $split_point{$key}= length($l);
+                    next KEY;
+                }
+            }
+            push @bad, $key;
+        }
+    }
+    if (@bad) {
+        warn sprintf "Failed to compute splitpoint for %d keys: %s", 0+@bad, join ", ", @bad;
+    }
+    return \%split_point;
+}
 
 sub build_split_words_new {
     my ($hash, $preprocess, $blob, $old_res)= @_;
     $|++;
     my ($parts,$seen,$included)= _build_seen_and_parts($hash);
     my ($buf)= _build_initial_buf($hash,$seen,$parts);
+    @$included= shuffle @$included;
 
-    my $orig_size= length($buf);
-    my $length_buf= $orig_size;
     my $is_longer= 0;
     my $iters= 0;
-    my $best_buf;
-    my $best_split_point={};
+    my $best_buf= "";
     my $prepend_word= "";
+    my $workdir= "best_test2";
+    -d $workdir or
+        mkdir $workdir
+            or die "failed to create dir '$workdir': $!";
+    _write_best_buf($workdir,$buf);
+
+    my $max_count= $ENV{MAX_COUNT} ? $ENV{MAX_COUNT} : 0+@$included;
     COMPRESS:
-    while ($is_longer<1000) {
-        $iters++;
-        $length_buf= length($buf);
-        $buf = $prepend_word . $buf if $prepend_word;
-        $buf .= "--" unless substr($buf,0,-2) eq "--";
-        my ($new_buf, $split_point)= _remove_unused_chars($buf,$hash,$parts);
-
-        my $append= 1;
-        my $new_buf_len= length($new_buf);
-
-        if (!defined($best_buf) or $new_buf_len < length($best_buf) ) {
-            @$included= shuffle @$included;
-            $is_longer=0;
-            $best_buf= $new_buf;
-            $best_split_point= $split_point;
-            my $file= sprintf "best.%d.%d.buf", $$,$new_buf_len;
-            open my $fh, ">", $file or die "error writing '$file': $!";
-            print $fh $best_buf;
-            close $fh;
+    for ($iters=0; $is_longer < $max_count; $iters++ ) {
+        $best_buf= _find_best_buf($workdir);
+        my $buf = $prepend_word . $best_buf . "--";
+        $buf= _remove_unused_chars($buf, $hash, $parts);
+        my $is_winner= 0;
+        if ( length($buf) < length($best_buf) ) {
+            if ($is_longer or !$iters) {
+                @$included= shuffle @$included;
+                $is_longer= 0;
+            }
+            _write_best_buf($workdir, $buf);
+            $is_winner= 1;
         } else {
             $is_longer++;
-            $append= 1;
         }
-        printf "delta: %+5d, length: %5d -> %5d - %6.2f%% [%4d/%4d] %s\n",
-            $new_buf_len - $length_buf,
-            $length_buf, $new_buf_len, $new_buf_len/$length_buf*100,
-            $is_longer, $iters, $prepend_word;
+        printf "%sdelta: %5d, length: %5d -> %5d - %6.2f%% [%4d/%4d/%4d] %s\n",
+            $is_winner ? "<" : ">",
+            length($buf) - length($best_buf),
+            length($best_buf), length($buf), length($buf)/length($best_buf)*100,
+            $is_longer, 0+keys %$hash, $iters, $prepend_word;
 
-        if ($append and @$included) {
-            $prepend_word= $included->[$iters % @$included];
-        } else {
-            $prepend_word= "";
-        }
-        $buf = $best_buf;
+        $prepend_word= $included->[$iters % @$included];
     }
-    my $key_len = 0;
-    $key_len += length($_) for keys %$hash;
-    printf "squeezed unused length from %d to %d (%%%.2f/%d)\n", 
-        $key_len, length($best_buf), length($best_buf) / $key_len * 100, length($best_buf) - $key_len;
+    $best_buf= _find_best_buf($workdir);
+    my ($split_point, $key_len)= _compute_leftmost_longest($best_buf, $hash, $parts);
 
-    return $best_buf, $best_split_point;
+    return $best_buf, $split_point;
 }
 
 sub build_split_words {
@@ -943,6 +990,16 @@ sub print_defines {
     print $ofh "\n";
 }
 
+sub _index {
+    my ($blob,$part)= @_;
+    my $res=
+        length($part) == 0 ? 0 :
+        length($part) == 1 ? ord($part) :
+        length($part) == 2 ? unpack("v",$part) :
+        index($blob,$part);
+    if ($res<0) { warn "failed to find '$part'" }
+    return $res;
+}
 
 sub build_array_of_struct {
     my ($second_level,$blob)= @_;
@@ -955,8 +1012,8 @@ sub build_array_of_struct {
         $tests{$row->{key}}= $defines{$row->{value}};
         my @u16= (
             $row->{seed2},
-            index($blob,$row->{prefix}//0),
-            index($blob,$row->{suffix}//0),
+            _index($blob,$row->{prefix}//""),
+            _index($blob,$row->{suffix}//""),
         );
         $_ > 0xFFFF and die "panic: value exceeds range of uint16_t"
             for @u16;
@@ -1022,6 +1079,10 @@ EOF_CODE
     print $ofh "\n";
     print $ofh "const struct $struct_name $table_name\[${prefix}_BUCKETS] = {\n", join(",\n", @$rows)."\n};\n\n";
     print $ofh <<"EOF_CODE";
+#define CHECK(blob_start,cmp_start,ofs,len) \\
+    (((len) > 2) ? ( memcmp((blob_start)+(ofs),(cmp_start),(len)) == 0 ) : \\
+     ((len) > 1) ? (((uint16_t*)(cmp_start))[0] == (ofs)) : \\
+      ((!(len)) || ((cmp_start)[0] == (ofs))))
 ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_len ) {
     const unsigned char * ptr= key;
     const unsigned char * ptr_end= key + key_len;
@@ -1039,9 +1100,8 @@ ${prefix}_VALt $match_name( const unsigned char * const key, const uint16_t key_
         n = h % ${prefix}_BUCKETS;
         if (
             ( $table_name\[n].pfx_len + $table_name\[n].sfx_len == key_len ) &&
-            ( memcmp($blob_name + $table_name\[n].pfx, key, $table_name\[n].pfx_len) == 0 ) &&
-            ( !$table_name\[n].sfx_len || memcmp($blob_name + $table_name\[n].sfx,
-                key + $table_name\[n].pfx_len, $table_name\[n].sfx_len) == 0 )
+            CHECK($blob_name,key,$table_name\[n].pfx,$table_name\[n].pfx_len) &&
+            CHECK($blob_name,key+$table_name\[n].pfx_len,$table_name\[n].sfx,$table_name\[n].sfx_len)
         ) {
             return $table_name\[n].value;
         }
