@@ -393,7 +393,7 @@ sub _remove_unused_final {
     my @score= (0);
     foreach my $i (0 .. $#$final_used) {
         if ($final_used->[$i]) {
-            if (0 and !$crossed->[$i] and length $parts[-1]) {
+            if (1 and !$crossed->[$i] and length $parts[-1]) {
                 push @parts, "";
                 push @score, 0;
             }
@@ -482,7 +482,7 @@ sub build_split_words_new {
     my $iters= 0;
     my $best_buf= "";
     my $prepend_word= "";
-    my $workdir= "best_test2";
+    my $workdir= $ENV{WORKDIR} || "best_test4";
     -d $workdir or
         mkdir $workdir
             or die "failed to create dir '$workdir': $!";
